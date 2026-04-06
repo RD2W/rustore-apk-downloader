@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: write
+
+jobs:
+  # ---- Linux builds ----
+  build-linux-x86_64:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Strip binary
+        run: strip target/release/rustore_apk_downloader
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: target/release/rustore_apk_downloader
+
+  build-linux-aarch64:
+    name: Linux aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        run: cargo install cross --locked
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build with cross
+        run: cross build --target aarch64-unknown-linux-gnu --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-aarch64
+          path: target/aarch64-unknown-linux-gnu/release/rustore_apk_downloader
+
+  # ---- Windows build ----
+  build-windows-x86_64:
+    name: Windows x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-gnu
+      - name: Install mingw-w64
+        run: |
+          sudo apt update
+          sudo apt install -y mingw-w64
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --target x86_64-pc-windows-gnu --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: target/x86_64-pc-windows-gnu/release/rustore_apk_downloader.exe
+
+  # ---- macOS builds (native + cross on Apple Silicon) ----
+  build-macos-x86_64:
+    name: macOS x86_64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --target x86_64-apple-darwin --release
+      - name: Strip binary
+        run: strip target/x86_64-apple-darwin/release/rustore_apk_downloader
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: target/x86_64-apple-darwin/release/rustore_apk_downloader
+
+  build-macos-aarch64:
+    name: macOS aarch64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Strip binary
+        run: strip target/release/rustore_apk_downloader
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64
+          path: target/release/rustore_apk_downloader
+
+  # ---- Package & Release ----
+  create-release:
+    name: Create Release
+    needs:
+      - build-linux-x86_64
+      - build-linux-aarch64
+      - build-windows-x86_64
+      - build-macos-x86_64
+      - build-macos-aarch64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create archives
+        env:
+          VER: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          tar -czf dist/RuStore_ApkDownloader_${VER}_linux-x86_64.tar.gz -C linux-x86_64 .
+          tar -czf dist/RuStore_ApkDownloader_${VER}_linux-aarch64.tar.gz -C linux-aarch64 .
+          zip -r dist/RuStore_ApkDownloader_${VER}_windows-x86_64.zip windows-x86_64 -j
+          tar -czf dist/RuStore_ApkDownloader_${VER}_macos-x86_64.tar.gz -C macos-x86_64 .
+          tar -czf dist/RuStore_ApkDownloader_${VER}_macos-aarch64.tar.gz -C macos-aarch64 .
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: Release ${{ steps.version.outputs.version }}
+          files: dist/*
+          draft: false
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
