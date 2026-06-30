@@ -50,39 +50,49 @@ async fn main() -> Result<()> {
     let downloader = infrastructure::RuStoreDownloader::new()?;
     let app_service = application::AppDownloadService::new(downloader);
     
-    let result = app_service.download_app_by_package_name(package_name, download_path).await;
-    
-    match result {
-        Ok((app_info, path)) => {
-            println!("=== Application Information ===");
-            println!("Name:      {}", app_info.app_name);
-            println!("Package:   {}", app_info.package_name);
-            println!("Version:   {} (code: {})", app_info.version_name, app_info.version_code);
-            println!("Size:      {} ({:.2} MB)", app_info.file_size, app_info.file_size as f64 / 1_048_576.0);
-            if let Some(ref rating) = app_info.rating {
-                println!("Rating:    {}", rating);
-            }
-            if let Some(ref age) = app_info.age_restriction {
-                println!("Age:       {}", age);
-            }
-            println!("Min SDK:   {}", app_info.min_sdk_version);
-            println!("Target SDK: {}", app_info.target_sdk_version);
-            if app_info.max_sdk_version > 0 {
-                println!("Max SDK:   {}", app_info.max_sdk_version);
-            }
-            if let Some(ref updated) = app_info.app_ver_updated_at {
-                // Extract date part from ISO 8601 timestamp (e.g. "2026-06-25T11:51:07.320+00:00")
-                let date = updated.split('T').next().unwrap_or(updated);
-                println!("Updated:   {}", date);
-            }
-            if let Some(ref sig) = app_info.signature {
-                println!("Signature: {}", sig);
-            }
-            println!("———————————————");
-            if let Some(ref whats_new) = app_info.whats_new {
-                println!("What's new: {}", whats_new);
-                println!("———————————————");
-            }
+    println!("Fetching app info for {}...", package_name);
+    let app_info = match app_service.get_app_info(package_name).await {
+        Ok(info) => info,
+        Err(e) => {
+            log::error!("Failed to get app info: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    println!();
+    println!("=== Application Information ===");
+    println!("Name:      {}", app_info.app_name);
+    println!("Package:   {}", app_info.package_name);
+    println!("Version:   {} (code: {})", app_info.version_name, app_info.version_code);
+    println!("Size:      {} ({:.2} MB)", app_info.file_size, app_info.file_size as f64 / 1_048_576.0);
+    if let Some(ref rating) = app_info.rating {
+        println!("Rating:    {}", rating);
+    }
+    if let Some(ref age) = app_info.age_restriction {
+        println!("Age:       {}", age);
+    }
+    println!("Min SDK:   {}", app_info.min_sdk_version);
+    println!("Target SDK: {}", app_info.target_sdk_version);
+    if app_info.max_sdk_version > 0 {
+        println!("Max SDK:   {}", app_info.max_sdk_version);
+    }
+    if let Some(ref updated) = app_info.app_ver_updated_at {
+        let date = updated.split('T').next().unwrap_or(updated);
+        println!("Updated:   {}", date);
+    }
+    if let Some(ref sig) = app_info.signature {
+        println!("Signature: {}", sig);
+    }
+    println!("———————————————");
+    if let Some(ref whats_new) = app_info.whats_new {
+        println!("What's new: {}", whats_new);
+        println!("———————————————");
+    }
+    println!();
+
+    println!("Downloading...");
+    match app_service.download_app(&app_info, download_path).await {
+        Ok(path) => {
             println!("Apk downloaded: {}", path);
         },
         Err(e) => {

@@ -1,6 +1,5 @@
 use crate::domain::{AppInfo, AppRepository, DomainError};
 
-/// Service that orchestrates the application download process
 pub struct AppDownloadService<R: AppRepository> {
     repo: R,
 }
@@ -10,22 +9,22 @@ impl<R: AppRepository> AppDownloadService<R> {
         Self { repo }
     }
 
-    /// Downloads an app by its package name.
-    /// Returns the app metadata and the path to the downloaded APK.
-    pub async fn download_app_by_package_name(
+    pub async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError> {
+        log::info!("Fetching app info for: {}", package_name);
+        let info = self.repo.get_app_info(package_name).await?;
+        log::info!("Retrieved app info: {}", info);
+        Ok(info)
+    }
+
+    pub async fn download_app(
         &self,
-        package_name: &str,
+        app_info: &AppInfo,
         download_path: &str,
-    ) -> Result<(AppInfo, String), DomainError> {
-        log::info!("Getting app info for package: {}", package_name);
-
-        let app_info = self.repo.get_app_info(package_name).await?;
-        log::info!("Retrieved app info: {}", app_info);
-
-        let downloaded_path = self.repo.download_app(&app_info, download_path).await?;
-
-        log::info!("Successfully downloaded app to: {}", downloaded_path);
-        Ok((app_info, downloaded_path))
+    ) -> Result<String, DomainError> {
+        log::info!("Downloading {} to {}", app_info.package_name, download_path);
+        let path = self.repo.download_app(app_info, download_path).await?;
+        log::info!("Downloaded app to: {}", path);
+        Ok(path)
     }
 }
 
@@ -113,13 +112,10 @@ mod tests {
         let mock_repo = MockRepository::new();
         let service = AppDownloadService::new(mock_repo);
 
-        let result = service
-            .download_app_by_package_name("com.test.app", "/tmp/downloads")
-            .await;
-
-        assert!(result.is_ok());
-        let (info, path) = result.unwrap();
+        let info = service.get_app_info("com.test.app").await.unwrap();
         assert_eq!(info.package_name, "com.test.app");
+
+        let path = service.download_app(&info, "/tmp/downloads").await.unwrap();
         assert_eq!(path, "/mock/path/app-1.0.0.apk");
         assert_eq!(service.repo.call_count.load(Ordering::SeqCst), 2);
     }
@@ -129,9 +125,7 @@ mod tests {
         let mock_repo = MockRepository::failing_get_info();
         let service = AppDownloadService::new(mock_repo);
 
-        let result = service
-            .download_app_by_package_name("com.test.app", "/tmp/downloads")
-            .await;
+        let result = service.get_app_info("com.test.app").await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
@@ -144,12 +138,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_download_fails_on_download_error() {
-        let mock_repo = MockRepository::failing_download();
+        let mock_repo = MockRepository::new();
         let service = AppDownloadService::new(mock_repo);
 
-        let result = service
-            .download_app_by_package_name("com.test.app", "/tmp/downloads")
-            .await;
+        let info = service.get_app_info("com.test.app").await.unwrap();
+
+        let failing_service = AppDownloadService::new(MockRepository::failing_download());
+        let result = failing_service.download_app(&info, "/tmp/downloads").await;
 
         assert!(result.is_err());
         match result.unwrap_err() {
