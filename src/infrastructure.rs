@@ -39,6 +39,34 @@ struct DownloadLinkBody {
     apk_url: String,
 }
 
+/// Guard that removes a temporary file on drop unless consumed (renamed).
+struct TempFileGuard {
+    path: String,
+    consumed: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: String) -> Self {
+        Self { path, consumed: false }
+    }
+
+    fn consume(&mut self) {
+        self.consumed = true;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if !self.consumed {
+            if let Err(e) = std::fs::remove_file(&self.path) {
+                log::warn!("Failed to remove temp file '{}': {}", self.path, e);
+            } else {
+                log::info!("Cleaned up temp file: {}", self.path);
+            }
+        }
+    }
+}
+
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {
     client: reqwest::Client,
@@ -228,6 +256,8 @@ impl AppRepository for RuStoreDownloader {
                 DomainError::FileSystemError(format!("Cannot create temporary file: {}", e))
             })?;
 
+        let mut temp_guard = TempFileGuard::new(temp_file_path.clone());
+
         let mut stream = response.bytes_stream();
         log::info!("Starting to stream download data to file");
         while let Some(chunk_result) = stream.next().await {
@@ -346,7 +376,8 @@ impl AppRepository for RuStoreDownloader {
             // Remove temporary ZIP file
             std::fs::remove_file(&temp_file_path)
                 .map_err(|e| DomainError::FileSystemError(format!("Cannot remove temporary ZIP file: {}", e)))?;
-            
+
+            temp_guard.consume();
             log::info!("Temporary ZIP archive {} removed", temp_file_path);
 
             Ok(util::clean_windows_path(&extracted_apk_path))
@@ -377,6 +408,7 @@ impl AppRepository for RuStoreDownloader {
                     DomainError::FileSystemError(format!("Cannot rename temporary file: {}", e))
                 })?;
             
+            temp_guard.consume();
             log::info!("File is already an APK, renamed to {}", final_file_path);
 
             Ok(util::clean_windows_path(&final_file_path))
