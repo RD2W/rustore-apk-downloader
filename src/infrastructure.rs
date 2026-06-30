@@ -21,81 +21,42 @@ impl RuStoreDownloader {
         Self { client }
     }
 
-    /// Sanitizes a path to prevent path traversal attacks
+    /// Resolves path to absolute form without requiring it to exist.
+    /// Also checks for unresolved path traversal patterns.
     fn sanitize_path(&self, path: &str) -> Result<String, DomainError> {
-        log::info!("Sanitizing path: {}", path);
-        
-        let path_obj = std::path::Path::new(path);
-        log::info!("Path object created: {:?}", path_obj);
+        let abs_path = std::path::absolute(path).map_err(|e| {
+            DomainError::FileSystemError(format!("Invalid path '{}': {}", path, e))
+        })?;
 
-        // On Windows, canonicalize can fail if the path is on a different drive
-        // So we'll handle this differently
-        let normalized_path = if cfg!(target_os = "windows") {
-            // For Windows, we'll use a more lenient approach
-            match path_obj.canonicalize() {
-                Ok(canonical_path) => canonical_path.to_string_lossy().to_string(),
-                Err(_) => {
-                    // If canonicalization fails, use the absolute path instead
-                    let abs_path = std::env::current_dir()
-                        .map_err(|e| DomainError::FileSystemError(format!("Cannot get current directory: {}", e)))?
-                        .join(path_obj)
-                        .canonicalize()
-                        .map_err(|e| {
-                            log::error!("Path canonicalization failed for '{}': {}", path, e);
-                            DomainError::FileSystemError(format!("Path canonicalization failed: {}", e))
-                        })?
-                        .to_string_lossy()
-                        .to_string();
-                    
-                    log::info!("Used absolute path approach for Windows: {}", abs_path);
-                    abs_path
-                }
-            }
-        } else {
-            // For Unix-like systems, continue with the original approach
-            path_obj
-                .canonicalize()
-                .map_err(|e| {
-                    log::error!("Path canonicalization failed for '{}': {}", path, e);
-                    DomainError::FileSystemError(format!("Path canonicalization failed: {}", e))
-                })?
-                .to_string_lossy()
-                .to_string()
-        };
-            
-        log::info!("Canonicalized path: {}", normalized_path);
+        let normalized = abs_path.to_string_lossy().to_string();
 
-        let base_dir = std::env::current_dir()
-            .map_err(|e| {
-                log::error!("Cannot get current directory: {}", e);
-                DomainError::FileSystemError(format!("Cannot get current directory: {}", e))
-            })?
-            .to_string_lossy()
-            .to_string();
-            
-        log::info!("Base directory: {}", base_dir);
+        let has_traversal = normalized.contains("/../")
+            || normalized.contains("\\..\\")
+            || normalized.ends_with("/..")
+            || normalized.ends_with("\\..");
 
-        // For Windows, we need to handle paths on different drives
-        if cfg!(target_os = "windows") {
-            // On Windows, we'll check if the path is safe by ensuring it doesn't contain dangerous patterns
-            if path.contains("../") || path.contains("..\\") || path.ends_with("/..") || path.ends_with("\\..") {
-                log::error!("Path traversal detected in path: {}", path);
-                return Err(DomainError::FileSystemError(
-                    format!("Path traversal detected: {}", path),
-                ));
-            }
-        } else {
-            // For Unix-like systems, continue with the original approach
-            if !normalized_path.starts_with(&base_dir) {
-                log::error!("Path traversal detected: '{}' does not start with base dir '{}'", normalized_path, base_dir);
-                return Err(DomainError::FileSystemError(
-                    format!("Path traversal detected: {}", path),
-                ));
-            }
+        if has_traversal {
+            return Err(DomainError::FileSystemError(format!(
+                "Path traversal detected: {}",
+                path
+            )));
         }
 
-        log::info!("Path sanitization successful: {}", normalized_path);
-        Ok(normalized_path)
+        log::info!("Sanitized path: {}", normalized);
+        Ok(normalized)
+    }
+
+    /// Checks that a file path is within a given base directory.
+    fn ensure_within_base(&self, file_path: &str, base_dir: &str) -> Result<(), DomainError> {
+        let file = std::path::Path::new(file_path);
+        let base = std::path::Path::new(base_dir);
+        if !file.starts_with(base) {
+            return Err(DomainError::FileSystemError(format!(
+                "File path '{}' is outside the download directory",
+                file_path
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -446,8 +407,8 @@ impl AppRepository for RuStoreDownloader {
             
             log::info!("Renaming temporary file to final APK path: {}", final_file_path);
             
-            // Ensure the final path is safe
-            let _ = self.sanitize_path(&final_file_path)?;
+            // Verify the final path is within the download directory
+            self.ensure_within_base(&final_file_path, &sanitized_download_path)?;
             
             std::fs::rename(&temp_file_path, &final_file_path)
                 .map_err(|e| {

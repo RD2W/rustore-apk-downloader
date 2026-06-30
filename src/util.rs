@@ -56,19 +56,13 @@ pub fn validate_zip_file(zip_path: &str) -> Result<bool, DomainError> {
     Ok(true)
 }
 
-/// Checks if a file is a valid APK file
+/// Checks if a file is a valid APK file (by content, not extension).
 pub fn is_valid_apk_file(file_path: &str) -> Result<bool, DomainError> {
-    // Check if file exists and has .apk extension
     let path = Path::new(file_path);
     if !path.exists() {
         return Ok(false);
     }
 
-    if path.extension().is_none_or(|ext| ext != "apk") {
-        return Ok(false);
-    }
-
-    // Check if it's a valid ZIP file (APK is a ZIP archive)
     if !std::fs::metadata(file_path)
         .map_err(|e| DomainError::FileSystemError(format!("Cannot access file metadata: {}", e)))?
         .is_file()
@@ -76,7 +70,6 @@ pub fn is_valid_apk_file(file_path: &str) -> Result<bool, DomainError> {
         return Ok(false);
     }
 
-    // Try to read as ZIP to verify it's a proper APK
     let file = std::fs::File::open(file_path)
         .map_err(|e| DomainError::FileSystemError(format!("Cannot open file for validation: {}", e)))?;
 
@@ -85,12 +78,11 @@ pub fn is_valid_apk_file(file_path: &str) -> Result<bool, DomainError> {
         Err(_) => return Ok(false),
     };
 
-    // Check for required APK components
     let file_list: Vec<String> = archive.file_names().map(|name| name.to_string()).collect();
     let has_manifest = file_list.iter().any(|name| name == "AndroidManifest.xml");
     let has_classes_dex = file_list.iter().any(|name| name == "classes.dex");
 
-    Ok(has_manifest || has_classes_dex)
+    Ok(has_manifest && has_classes_dex)
 }
 
 /// Helper function to check if a file is a ZIP file by magic number
