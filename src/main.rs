@@ -19,6 +19,7 @@ fn print_help(program_name: &str) {
     println!();
     println!("Flags:");
     println!("  -h, --help\t\tShow this help message");
+    println!("  -V, --version\t\tShow version");
 }
 
 #[tokio::main]
@@ -27,6 +28,12 @@ async fn main() -> Result<()> {
 
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
+
+    // Check for version flag
+    if args.len() == 2 && (args[1] == "-V" || args[1] == "--version") {
+        println!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
 
     // Check for help flags
     if args.len() == 2 && (args[1] == "-h" || args[1] == "--help") {
