@@ -1,9 +1,99 @@
 use crate::domain::{AppInfo, AppRepository, DomainError};
 use crate::util;
-use tokio::io::AsyncWriteExt;
-use tokio::fs;
-use zip::ZipArchive;
 use futures_util::StreamExt;
+use serde::Deserialize;
+use tokio::fs;
+use tokio::io::AsyncWriteExt;
+use zip::ZipArchive;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OverallInfoResponse {
+    body: AppBody,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppBody {
+    app_id: i64,
+    #[serde(rename = "appName")]
+    app_name: String,
+    package_name: String,
+    version_name: String,
+    #[serde(rename = "shortDescription")]
+    short_description: String,
+    company_name: Option<String>,
+    version_code: i64,
+    min_sdk_version: i64,
+    max_sdk_version: i64,
+    target_sdk_version: i64,
+    file_size: u64,
+    icon_url: String,
+    #[serde(default)]
+    rating: Option<RatingBody>,
+    #[serde(rename = "whatsNew", default)]
+    whats_new: Option<String>,
+    #[serde(rename = "ageRestriction", default)]
+    age_restriction: Option<AgeRestrictionBody>,
+    #[serde(rename = "appVerUpdatedAt", default)]
+    app_ver_updated_at: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RatingBody {
+    average: f64,
+    votes: u64,
+}
+
+#[derive(Deserialize)]
+struct AgeRestrictionBody {
+    category: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadLinkResponse {
+    body: DownloadLinkBody,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadLinkBody {
+    apk_url: String,
+}
+
+/// Guard that removes a temporary file on drop unless consumed (renamed).
+struct TempFileGuard {
+    path: String,
+    consumed: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: String) -> Self {
+        Self {
+            path,
+            consumed: false,
+        }
+    }
+
+    fn consume(&mut self) {
+        self.consumed = true;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if !self.consumed {
+            if let Err(e) = std::fs::remove_file(&self.path) {
+                log::warn!("Failed to remove temp file '{}': {}", self.path, e);
+            } else {
+                log::info!("Cleaned up temp file: {}", self.path);
+            }
+        }
+    }
+}
 
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {
@@ -12,101 +102,65 @@ pub struct RuStoreDownloader {
 
 impl RuStoreDownloader {
     /// Creates a new instance of the downloader
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, DomainError> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30)) // 30 seconds timeout for API calls
+            .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("Failed to build HTTP client");
-            
-        Self { client }
+            .map_err(|e| {
+                DomainError::NetworkError(format!("Failed to build HTTP client: {}", e))
+            })?;
+
+        Ok(Self { client })
     }
 
-    /// Sanitizes a path to prevent path traversal attacks
+    /// Resolves path to absolute form without requiring it to exist.
+    /// Also checks for unresolved path traversal patterns.
     fn sanitize_path(&self, path: &str) -> Result<String, DomainError> {
-        log::info!("Sanitizing path: {}", path);
-        
-        let path_obj = std::path::Path::new(path);
-        log::info!("Path object created: {:?}", path_obj);
+        let abs_path = std::path::absolute(path)
+            .map_err(|e| DomainError::FileSystemError(format!("Invalid path '{}': {}", path, e)))?;
 
-        // On Windows, canonicalize can fail if the path is on a different drive
-        // So we'll handle this differently
-        let normalized_path = if cfg!(target_os = "windows") {
-            // For Windows, we'll use a more lenient approach
-            match path_obj.canonicalize() {
-                Ok(canonical_path) => canonical_path.to_string_lossy().to_string(),
-                Err(_) => {
-                    // If canonicalization fails, use the absolute path instead
-                    let abs_path = std::env::current_dir()
-                        .map_err(|e| DomainError::FileSystemError(format!("Cannot get current directory: {}", e)))?
-                        .join(path_obj)
-                        .canonicalize()
-                        .map_err(|e| {
-                            log::error!("Path canonicalization failed for '{}': {}", path, e);
-                            DomainError::FileSystemError(format!("Path canonicalization failed: {}", e))
-                        })?
-                        .to_string_lossy()
-                        .to_string();
-                    
-                    log::info!("Used absolute path approach for Windows: {}", abs_path);
-                    abs_path
-                }
-            }
-        } else {
-            // For Unix-like systems, continue with the original approach
-            path_obj
-                .canonicalize()
-                .map_err(|e| {
-                    log::error!("Path canonicalization failed for '{}': {}", path, e);
-                    DomainError::FileSystemError(format!("Path canonicalization failed: {}", e))
-                })?
-                .to_string_lossy()
-                .to_string()
-        };
-            
-        log::info!("Canonicalized path: {}", normalized_path);
+        let normalized = abs_path.to_string_lossy().to_string();
 
-        let base_dir = std::env::current_dir()
-            .map_err(|e| {
-                log::error!("Cannot get current directory: {}", e);
-                DomainError::FileSystemError(format!("Cannot get current directory: {}", e))
-            })?
-            .to_string_lossy()
-            .to_string();
-            
-        log::info!("Base directory: {}", base_dir);
+        let has_traversal = normalized.contains("/../")
+            || normalized.contains("\\..\\")
+            || normalized.ends_with("/..")
+            || normalized.ends_with("\\..");
 
-        // For Windows, we need to handle paths on different drives
-        if cfg!(target_os = "windows") {
-            // On Windows, we'll check if the path is safe by ensuring it doesn't contain dangerous patterns
-            if path.contains("../") || path.contains("..\\") || path.ends_with("/..") || path.ends_with("\\..") {
-                log::error!("Path traversal detected in path: {}", path);
-                return Err(DomainError::FileSystemError(
-                    format!("Path traversal detected: {}", path),
-                ));
-            }
-        } else {
-            // For Unix-like systems, continue with the original approach
-            if !normalized_path.starts_with(&base_dir) {
-                log::error!("Path traversal detected: '{}' does not start with base dir '{}'", normalized_path, base_dir);
-                return Err(DomainError::FileSystemError(
-                    format!("Path traversal detected: {}", path),
-                ));
-            }
+        if has_traversal {
+            return Err(DomainError::FileSystemError(format!(
+                "Path traversal detected: {}",
+                path
+            )));
         }
 
-        log::info!("Path sanitization successful: {}", normalized_path);
-        Ok(normalized_path)
+        log::info!("Sanitized path: {}", normalized);
+        Ok(normalized)
+    }
+
+    /// Checks that a file path is within a given base directory.
+    fn ensure_within_base(&self, file_path: &str, base_dir: &str) -> Result<(), DomainError> {
+        let file = std::path::Path::new(file_path);
+        let base = std::path::Path::new(base_dir);
+        if !file.starts_with(base) {
+            return Err(DomainError::FileSystemError(format!(
+                "File path '{}' is outside the download directory",
+                file_path
+            )));
+        }
+        Ok(())
     }
 }
 
-#[async_trait::async_trait]
 impl AppRepository for RuStoreDownloader {
     async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError> {
         log::info!("Attempting to get app info for package: {}", package_name);
 
-        // Make request to get overall app info
-        let url = format!("https://backapi.rustore.ru/applicationData/overallInfo/{}", package_name);
-        let response = self.client
+        let url = format!(
+            "https://backapi.rustore.ru/applicationData/overallInfo/{}",
+            package_name
+        );
+        let response = self
+            .client
             .get(&url)
             .send()
             .await
@@ -122,60 +176,33 @@ impl AppRepository for RuStoreDownloader {
             )));
         }
 
-        let response_text = response
-            .text()
+        let info: OverallInfoResponse = response
+            .json()
             .await
-            .map_err(|e| DomainError::NetworkError(format!("Failed to read response: {}", e)))?;
-
-        let response_json: serde_json::Value = serde_json::from_str(&response_text)
             .map_err(|e| DomainError::ApiError(format!("Invalid response format: {}", e)))?;
 
-        // Extract body info
-        let body_info = response_json
-            .get("body")
-            .ok_or_else(|| DomainError::ApiError("Response missing 'body' field".to_string()))?;
-
-        let app_id = body_info
-            .get("appId")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| DomainError::ApiError("Missing appId in response".to_string()))?;
-
-        let package_name_response = body_info
-            .get("packageName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing packageName in response".to_string()))?
-            .to_string();
-
-        let version_name = body_info
-            .get("versionName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing versionName in response".to_string()))?
-            .to_string();
-
-        let company_name = body_info
-            .get("companyName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing companyName in response".to_string()))?;
+        let body = info.body;
 
         log::info!(
-            "Successfully found app with package name: {}, version: {}, company: {}",
-            package_name_response, version_name, company_name
+            "Successfully found app: {}, version: {}, company: {}",
+            body.package_name,
+            body.version_name,
+            body.company_name.as_deref().unwrap_or("N/A")
         );
 
-        // Now get download link
-        let download_link_url = "https://backapi.rustore.ru/applicationData/download-link";
-        let download_request_body = serde_json::json!({
-            "appId": app_id,
-            "firstInstall": true
-        });
-
-        let download_response = self.client
-            .post(download_link_url)
+        let download_response = self
+            .client
+            .post("https://backapi.rustore.ru/applicationData/download-link")
             .header("Content-Type", "application/json; charset=utf-8")
-            .json(&download_request_body)
+            .json(&serde_json::json!({
+                "appId": body.app_id,
+                "firstInstall": true
+            }))
             .send()
             .await
-            .map_err(|e| DomainError::NetworkError(format!("Download link request failed: {}", e)))?;
+            .map_err(|e| {
+                DomainError::NetworkError(format!("Download link request failed: {}", e))
+            })?;
 
         let download_status = download_response.status();
         log::info!("Download link request status: {}", download_status);
@@ -187,82 +214,65 @@ impl AppRepository for RuStoreDownloader {
             )));
         }
 
-        let download_response_text = download_response
-            .text()
-            .await
-            .map_err(|e| DomainError::NetworkError(format!("Failed to read download response: {}", e)))?;
+        let dl: DownloadLinkResponse = download_response.json().await.map_err(|e| {
+            DomainError::ApiError(format!("Invalid download response format: {}", e))
+        })?;
 
-        let download_response_json: serde_json::Value = serde_json::from_str(&download_response_text)
-            .map_err(|e| DomainError::ApiError(format!("Invalid download response format: {}", e)))?;
-
-        let download_link = download_response_json
-            .get("body")
-            .and_then(|v| v.get("apkUrl"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing download URL in response".to_string()))?
-            .to_string();
-
-        // Create AppInfo from response data
-        let app_info = AppInfo {
+        Ok(AppInfo {
+            app_name: body.app_name,
+            package_name: body.package_name,
+            version_name: body.version_name,
+            version_code: body.version_code,
+            short_description: body.short_description,
+            file_size: body.file_size,
+            min_sdk_version: body.min_sdk_version,
+            max_sdk_version: body.max_sdk_version,
+            target_sdk_version: body.target_sdk_version,
+            icon_url: body.icon_url,
+            download_url: dl.body.apk_url,
             integration_type: "rustore".to_string(),
-            download_url: download_link,
-            package_name: body_info
-                .get("packageName")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| DomainError::ApiError("Missing packageName in response".to_string()))?
-                .to_string(),
-            version_name: body_info
-                .get("versionName")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| DomainError::ApiError("Missing versionName in response".to_string()))?
-                .to_string(),
-            version_code: body_info
-                .get("versionCode")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing versionCode in response".to_string()))? as i32,
-            min_sdk_version: body_info
-                .get("minSdkVersion")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing minSdkVersion in response".to_string()))? as i32,
-            max_sdk_version: body_info
-                .get("maxSdkVersion")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing maxSdkVersion in response".to_string()))? as i32,
-            target_sdk_version: body_info
-                .get("targetSdkVersion")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing targetSdkVersion in response".to_string()))? as i32,
-            file_size: body_info
-                .get("fileSize")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| DomainError::ApiError("Missing fileSize in response".to_string()))?,
-            icon_url: body_info
-                .get("iconUrl")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| DomainError::ApiError("Missing iconUrl in response".to_string()))?
-                .to_string(),
-        };
-
-        Ok(app_info)
+            rating: body.rating.map(|r| crate::domain::Rating {
+                average: r.average,
+                votes: r.votes,
+            }),
+            whats_new: body.whats_new,
+            age_restriction: body.age_restriction.map(|a| a.category),
+            app_ver_updated_at: body.app_ver_updated_at,
+            signature: body.signature,
+        })
     }
 
-    async fn download_app(&self, app_info: &AppInfo, download_path: &str) -> Result<String, DomainError> {
-        log::info!("Starting download of application: {}", app_info.package_name);
+    async fn download_app(
+        &self,
+        app_info: &AppInfo,
+        download_path: &str,
+    ) -> Result<String, DomainError> {
+        log::info!(
+            "Starting download of application: {}",
+            app_info.package_name
+        );
         log::info!("Download path: {}", download_path);
 
         // Sanitize the download path
         let sanitized_download_path = self.sanitize_path(download_path)?;
-        
+
         // Create download directory if it doesn't exist
         log::info!("Creating directory: {}", sanitized_download_path);
         fs::create_dir_all(&sanitized_download_path)
             .await
             .map_err(|e| {
-                log::error!("Cannot create download directory '{}': {}", sanitized_download_path, e);
+                log::error!(
+                    "Cannot create download directory '{}': {}",
+                    sanitized_download_path,
+                    e
+                );
                 DomainError::FileSystemError(format!("Cannot create download directory: {}", e))
             })?;
-        
-        log::info!("Created directory {} for downloading app", sanitized_download_path);
+
+        log::info!(
+            "Created directory {} for downloading app",
+            sanitized_download_path
+        );
 
         // Create temporary filename
         let temp_filename = format!("{}-{}.tmp", app_info.package_name, app_info.version_name);
@@ -270,12 +280,13 @@ impl AppRepository for RuStoreDownloader {
             .join(&temp_filename)
             .to_string_lossy()
             .to_string();
-        
+
         log::info!("Temporary file path: {}", temp_file_path);
 
         // Download the file
         log::info!("Downloading from: {}", app_info.download_url);
-        let response = self.client
+        let response = self
+            .client
             .get(&app_info.download_url)
             .timeout(std::time::Duration::from_secs(300)) // 5 minutes timeout for download
             .send()
@@ -285,14 +296,16 @@ impl AppRepository for RuStoreDownloader {
         let status = response.status();
         if status != 200 {
             if status == 401 {
-                return Err(DomainError::DownloadError(
-                    format!("Failed to download application. Unauthorized access. Request returned status code: {}", status)
-                ));
+                return Err(DomainError::DownloadError(format!(
+                    "Failed to download application. Unauthorized access. Request returned status code: {}",
+                    status
+                )));
             } else {
                 let response_text = response.text().await.unwrap_or_default();
-                return Err(DomainError::DownloadError(
-                    format!("Failed to download application. Request returned status code: {}, Response: {}", status, response_text)
-                ));
+                return Err(DomainError::DownloadError(format!(
+                    "Failed to download application. Request returned status code: {}, Response: {}",
+                    status, response_text
+                )));
             }
         }
 
@@ -305,36 +318,44 @@ impl AppRepository for RuStoreDownloader {
                 DomainError::FileSystemError(format!("Cannot create temporary file: {}", e))
             })?;
 
+        let mut temp_guard = TempFileGuard::new(temp_file_path.clone());
+
         let mut stream = response.bytes_stream();
         log::info!("Starting to stream download data to file");
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result
-                .map_err(|e| DomainError::DownloadError(format!("Error reading download stream: {}", e)))?;
-            file.write_all(&chunk)
-                .await
-                .map_err(|e| {
-                    log::error!("Error writing to file '{}': {}", temp_file_path, e);
-                    DomainError::FileSystemError(format!("Error writing to file: {}", e))
-                })?;
+            let chunk = chunk_result.map_err(|e| {
+                DomainError::DownloadError(format!("Error reading download stream: {}", e))
+            })?;
+            file.write_all(&chunk).await.map_err(|e| {
+                log::error!("Error writing to file '{}': {}", temp_file_path, e);
+                DomainError::FileSystemError(format!("Error writing to file: {}", e))
+            })?;
         }
 
-        file.flush()
-            .await
-            .map_err(|e| {
-                log::error!("Error flushing file '{}': {}", temp_file_path, e);
-                DomainError::FileSystemError(format!("Error flushing file: {}", e))
-            })?;
+        file.flush().await.map_err(|e| {
+            log::error!("Error flushing file '{}': {}", temp_file_path, e);
+            DomainError::FileSystemError(format!("Error flushing file: {}", e))
+        })?;
 
         log::info!("File was downloaded from RuStore to {}", temp_file_path);
 
         // Check file size
         let downloaded_size = fs::metadata(&temp_file_path)
             .await
-            .map_err(|e| DomainError::FileSystemError(format!("Cannot access downloaded file metadata: {}", e)))?
+            .map_err(|e| {
+                DomainError::FileSystemError(format!(
+                    "Cannot access downloaded file metadata: {}",
+                    e
+                ))
+            })?
             .len();
-        
+
         if app_info.file_size > 0 && downloaded_size != app_info.file_size {
-            log::warn!("File size mismatch: expected {}, got {}", app_info.file_size, downloaded_size);
+            log::warn!(
+                "File size mismatch: expected {}, got {}",
+                app_info.file_size,
+                downloaded_size
+            );
         }
 
         // Calculate file hash for integrity check
@@ -348,83 +369,95 @@ impl AppRepository for RuStoreDownloader {
 
             // Validate ZIP file
             util::validate_zip_file(&temp_file_path)?;
-            
-            // Open the ZIP file and look for APK files
-            let zip_file = std::fs::File::open(&temp_file_path)
-                .map_err(|e| DomainError::FileSystemError(format!("Cannot open ZIP file: {}", e)))?;
 
-            let mut archive = ZipArchive::new(zip_file)
-                .map_err(|e| DomainError::ValidationError(format!("Cannot read ZIP archive: {}", e)))?;
-            
+            // Open the ZIP file and look for APK files
+            let zip_file = std::fs::File::open(&temp_file_path).map_err(|e| {
+                DomainError::FileSystemError(format!("Cannot open ZIP file: {}", e))
+            })?;
+
+            let mut archive = ZipArchive::new(zip_file).map_err(|e| {
+                DomainError::ValidationError(format!("Cannot read ZIP archive: {}", e))
+            })?;
+
             // Find APK files in the archive
             let mut apk_files = Vec::new();
             for i in 0..archive.len() {
-                let file = archive.by_index(i)
-                    .map_err(|e| DomainError::ValidationError(format!("Cannot access ZIP entry: {}", e)))?;
-                
+                let file = archive.by_index(i).map_err(|e| {
+                    DomainError::ValidationError(format!("Cannot access ZIP entry: {}", e))
+                })?;
+
                 let file_name = file.name().to_string();
                 if file_name.to_lowercase().ends_with(".apk") {
                     apk_files.push(file_name);
                 }
             }
-            
+
             if apk_files.is_empty() {
-                return Err(DomainError::DownloadError("No APK file found inside the ZIP archive".to_string()));
-            }
-            
-            // Take the first APK file found
-            let apk_filename = &apk_files[0];
-            
-            // Check for dangerous file paths
-            if apk_filename.contains("..") || apk_filename.starts_with('/') || apk_filename.contains("../") {
-                return Err(DomainError::ValidationError(
-                    format!("Dangerous file path detected in ZIP: {}", apk_filename)
+                return Err(DomainError::DownloadError(
+                    "No APK file found inside the ZIP archive".to_string(),
                 ));
             }
-            
+
+            // Take the first APK file found
+            let apk_filename = &apk_files[0];
+
+            // Check for dangerous file paths
+            if apk_filename.contains("..")
+                || apk_filename.starts_with('/')
+                || apk_filename.contains("../")
+            {
+                return Err(DomainError::ValidationError(format!(
+                    "Dangerous file path detected in ZIP: {}",
+                    apk_filename
+                )));
+            }
+
             // Create safe path for extracted APK
-            let extracted_apk_filename = format!("{}-{}.apk", app_info.package_name, app_info.version_name);
+            let extracted_apk_filename =
+                format!("{}-{}.apk", app_info.package_name, app_info.version_name);
             let extracted_apk_path = std::path::Path::new(&sanitized_download_path)
                 .join(&extracted_apk_filename)
                 .to_string_lossy()
                 .to_string();
-            
+
             log::info!("Extracting APK file to: {}", extracted_apk_path);
-            
-            // Extract the APK file
+
+            // Extract the APK file (stream directly to disk to avoid buffering in memory)
             {
-                let mut apk_file_in_zip = archive
-                    .by_name(apk_filename)
-                    .map_err(|e| DomainError::ValidationError(format!("Cannot find APK in ZIP: {}", e)))?;
-                
-                let mut extracted_apk_data = Vec::new();
-                std::io::copy(&mut apk_file_in_zip, &mut extracted_apk_data)
-                    .map_err(|e| DomainError::FileSystemError(format!("Cannot extract APK from ZIP: {}", e)))?;
-                
-                std::fs::write(&extracted_apk_path, &extracted_apk_data)
-                    .map_err(|e| {
-                        log::error!("Cannot write extracted APK to '{}': {}", extracted_apk_path, e);
-                        DomainError::FileSystemError(format!("Cannot write extracted APK: {}", e))
-                    })?;
+                let mut apk_file_in_zip = archive.by_name(apk_filename).map_err(|e| {
+                    DomainError::ValidationError(format!("Cannot find APK in ZIP: {}", e))
+                })?;
+
+                let mut out_file = std::fs::File::create(&extracted_apk_path).map_err(|e| {
+                    log::error!("Cannot create APK file '{}': {}", extracted_apk_path, e);
+                    DomainError::FileSystemError(format!("Cannot create APK file: {}", e))
+                })?;
+
+                std::io::copy(&mut apk_file_in_zip, &mut out_file).map_err(|e| {
+                    DomainError::FileSystemError(format!("Cannot extract APK from ZIP: {}", e))
+                })?;
             } // End scope to drop the ZipFile before async operations
-            
+
             log::info!("APK extracted to {}", extracted_apk_path);
 
             // Verify the extracted APK
             if !util::is_valid_apk_file(&extracted_apk_path)? {
-                return Err(DomainError::ValidationError(
-                    format!("Extracted file is not a valid APK: {}", extracted_apk_path)
-                ));
+                return Err(DomainError::ValidationError(format!(
+                    "Extracted file is not a valid APK: {}",
+                    extracted_apk_path
+                )));
             }
 
             // Check hash of extracted APK
             let extracted_apk_hash = util::calculate_file_hash(&extracted_apk_path).await?;
             log::info!("Extracted APK SHA-256 hash: {}", extracted_apk_hash);
-            
+
             // Remove temporary ZIP file
-            std::fs::remove_file(&temp_file_path)
-                .map_err(|e| DomainError::FileSystemError(format!("Cannot remove temporary ZIP file: {}", e)))?;
-            
+            std::fs::remove_file(&temp_file_path).map_err(|e| {
+                DomainError::FileSystemError(format!("Cannot remove temporary ZIP file: {}", e))
+            })?;
+
+            temp_guard.consume();
             log::info!("Temporary ZIP archive {} removed", temp_file_path);
 
             Ok(util::clean_windows_path(&extracted_apk_path))
@@ -433,28 +466,40 @@ impl AppRepository for RuStoreDownloader {
 
             // The file is not a ZIP, check if it's a valid APK
             if !util::is_valid_apk_file(&temp_file_path)? {
-                return Err(DomainError::ValidationError(
-                    format!("Downloaded file is not a valid APK: {}", temp_file_path)
-                ));
+                return Err(DomainError::ValidationError(format!(
+                    "Downloaded file is not a valid APK: {}",
+                    temp_file_path
+                )));
             }
-            
+
             // Rename the temporary file to APK
             let final_file_path = std::path::Path::new(&sanitized_download_path)
-                .join(format!("{}-{}.apk", app_info.package_name, app_info.version_name))
+                .join(format!(
+                    "{}-{}.apk",
+                    app_info.package_name, app_info.version_name
+                ))
                 .to_string_lossy()
                 .to_string();
-            
-            log::info!("Renaming temporary file to final APK path: {}", final_file_path);
-            
-            // Ensure the final path is safe
-            let _ = self.sanitize_path(&final_file_path)?;
-            
-            std::fs::rename(&temp_file_path, &final_file_path)
-                .map_err(|e| {
-                    log::error!("Cannot rename temporary file from '{}' to '{}': {}", temp_file_path, final_file_path, e);
-                    DomainError::FileSystemError(format!("Cannot rename temporary file: {}", e))
-                })?;
-            
+
+            log::info!(
+                "Renaming temporary file to final APK path: {}",
+                final_file_path
+            );
+
+            // Verify the final path is within the download directory
+            self.ensure_within_base(&final_file_path, &sanitized_download_path)?;
+
+            std::fs::rename(&temp_file_path, &final_file_path).map_err(|e| {
+                log::error!(
+                    "Cannot rename temporary file from '{}' to '{}': {}",
+                    temp_file_path,
+                    final_file_path,
+                    e
+                );
+                DomainError::FileSystemError(format!("Cannot rename temporary file: {}", e))
+            })?;
+
+            temp_guard.consume();
             log::info!("File is already an APK, renamed to {}", final_file_path);
 
             Ok(util::clean_windows_path(&final_file_path))
