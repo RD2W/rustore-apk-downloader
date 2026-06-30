@@ -39,8 +39,7 @@ impl fmt::Display for AppInfo {
         write!(
             f,
             "{} ({}) v{} — {}",
-            self.app_name, self.package_name, self.version_name,
-            self.short_description
+            self.app_name, self.package_name, self.version_name, self.short_description
         )
     }
 }
@@ -65,13 +64,16 @@ pub enum DomainError {
 
     #[error("File system error: {0}")]
     FileSystemError(String),
-
 }
 
 /// Interface for application repository (to be implemented by infrastructure layer)
 pub trait AppRepository {
     async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError>;
-    async fn download_app(&self, app_info: &AppInfo, download_path: &str) -> Result<String, DomainError>;
+    async fn download_app(
+        &self,
+        app_info: &AppInfo,
+        download_path: &str,
+    ) -> Result<String, DomainError>;
 }
 
 #[cfg(test)]
@@ -92,7 +94,10 @@ mod tests {
             icon_url: "https://example.com/icon.png".to_string(),
             download_url: "https://example.com/app.apk".to_string(),
             integration_type: "rustore".to_string(),
-            rating: Some(Rating { average: 4.5, votes: 1000 }),
+            rating: Some(Rating {
+                average: 4.5,
+                votes: 1000,
+            }),
             whats_new: Some("Bug fixes".to_string()),
             age_restriction: Some("0+".to_string()),
             app_ver_updated_at: None,
@@ -157,7 +162,10 @@ mod tests {
 
     #[test]
     fn test_rating_display() {
-        let rating = Rating { average: 4.26, votes: 40474 };
+        let rating = Rating {
+            average: 4.26,
+            votes: 40474,
+        };
         let display = format!("{}", rating);
         assert!(display.contains("4.26"));
         assert!(display.contains("40474"));

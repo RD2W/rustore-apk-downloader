@@ -1,9 +1,9 @@
 use anyhow::Result;
 
+mod application;
 mod cli;
 mod display;
 mod domain;
-mod application;
 mod infrastructure;
 mod util;
 
@@ -15,7 +15,9 @@ async fn main() -> Result<()> {
     let action = cli::parse_args(&args);
 
     let pkg = match &action {
-        cli::Action::Info(pkg) | cli::Action::ApkVersion(pkg) | cli::Action::JsonInfo(pkg) => pkg.clone(),
+        cli::Action::Info(pkg) | cli::Action::ApkVersion(pkg) | cli::Action::JsonInfo(pkg) => {
+            pkg.clone()
+        }
         cli::Action::Download { package, .. } => package.clone(),
     };
 

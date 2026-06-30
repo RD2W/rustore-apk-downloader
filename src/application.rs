@@ -98,10 +98,16 @@ mod tests {
             Ok(Self::mock_app_info())
         }
 
-        async fn download_app(&self, _app_info: &AppInfo, _download_path: &str) -> Result<String, DomainError> {
+        async fn download_app(
+            &self,
+            _app_info: &AppInfo,
+            _download_path: &str,
+        ) -> Result<String, DomainError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);
             if self.should_fail_download {
-                return Err(DomainError::DownloadError("Mock: download failed".to_string()));
+                return Err(DomainError::DownloadError(
+                    "Mock: download failed".to_string(),
+                ));
             }
             Ok("/mock/path/app-1.0.0.apk".to_string())
         }

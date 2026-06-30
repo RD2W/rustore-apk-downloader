@@ -15,12 +15,8 @@ pub fn parse_args(args: &[String]) -> Action {
             crate::display::print_help(&args[0]);
             std::process::exit(0);
         }
-        [_, flag, pkg] if ["-i", "--info"].contains(&flag.as_str()) => {
-            Action::Info(pkg.clone())
-        }
-        [_, flag, pkg] if ["-v"].contains(&flag.as_str()) => {
-            Action::ApkVersion(pkg.clone())
-        }
+        [_, flag, pkg] if ["-i", "--info"].contains(&flag.as_str()) => Action::Info(pkg.clone()),
+        [_, flag, pkg] if ["-v"].contains(&flag.as_str()) => Action::ApkVersion(pkg.clone()),
         [_, flag, pkg] if ["-j", "--json-info"].contains(&flag.as_str()) => {
             Action::JsonInfo(pkg.clone())
         }

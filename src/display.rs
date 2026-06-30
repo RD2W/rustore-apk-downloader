@@ -6,10 +6,22 @@ pub fn print_help(program_name: &str) {
     println!("Version: {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("Usage:");
-    println!("  {} <package> <path>          Download an APK", program_name);
-    println!("  {} --info <package>          Show full app information", program_name);
-    println!("  {} --version <package>       Show app version only", program_name);
-    println!("  {} --json-info <package>     Show app info as JSON", program_name);
+    println!(
+        "  {} <package> <path>          Download an APK",
+        program_name
+    );
+    println!(
+        "  {} --info <package>          Show full app information",
+        program_name
+    );
+    println!(
+        "  {} --version <package>       Show app version only",
+        program_name
+    );
+    println!(
+        "  {} --json-info <package>     Show app info as JSON",
+        program_name
+    );
     println!();
     println!("Flags:");
     println!("  -h, --help          Show this help message");
@@ -23,8 +35,15 @@ pub fn print_app_info(info: &domain::AppInfo) {
     println!("=== Application Information ===");
     println!("Name:      {}", info.app_name);
     println!("Package:   {}", info.package_name);
-    println!("Version:   {} (code: {})", info.version_name, info.version_code);
-    println!("Size:      {} ({:.2} MB)", info.file_size, info.file_size as f64 / 1_048_576.0);
+    println!(
+        "Version:   {} (code: {})",
+        info.version_name, info.version_code
+    );
+    println!(
+        "Size:      {} ({:.2} MB)",
+        info.file_size,
+        info.file_size as f64 / 1_048_576.0
+    );
     if let Some(ref rating) = info.rating {
         println!("Rating:    {}", rating);
     }

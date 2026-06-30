@@ -1,24 +1,23 @@
 use crate::domain::DomainError;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
-use zip::ZipArchive;
 use tokio::io::AsyncReadExt;
+use zip::ZipArchive;
 
 /// Calculates SHA-256 hash of a file
 pub async fn calculate_file_hash(file_path: &str) -> Result<String, DomainError> {
-    let mut file = tokio::fs::File::open(file_path)
-        .await
-        .map_err(|e| DomainError::FileSystemError(format!("Cannot open file for hashing: {}", e)))?;
+    let mut file = tokio::fs::File::open(file_path).await.map_err(|e| {
+        DomainError::FileSystemError(format!("Cannot open file for hashing: {}", e))
+    })?;
 
     let mut hasher = Sha256::new();
     let mut buffer = [0; 65536];
 
     loop {
-        let bytes_read = file
-            .read(&mut buffer)
-            .await
-            .map_err(|e| DomainError::FileSystemError(format!("Error reading file for hashing: {}", e)))?;
+        let bytes_read = file.read(&mut buffer).await.map_err(|e| {
+            DomainError::FileSystemError(format!("Error reading file for hashing: {}", e))
+        })?;
 
         if bytes_read == 0 {
             break;
@@ -27,7 +26,11 @@ pub async fn calculate_file_hash(file_path: &str) -> Result<String, DomainError>
         hasher.update(&buffer[..bytes_read]);
     }
 
-    Ok(hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect())
 }
 
 /// Validates ZIP archive entries for path traversal safety.
@@ -39,15 +42,17 @@ pub fn validate_zip_file(zip_path: &str) -> Result<(), DomainError> {
         .map_err(|e| DomainError::ValidationError(format!("Invalid ZIP file: {}", e)))?;
 
     for i in 0..archive.len() {
-        let entry = archive.by_index(i)
+        let entry = archive
+            .by_index(i)
             .map_err(|e| DomainError::ValidationError(format!("Error reading ZIP entry: {}", e)))?;
 
         let file_name = entry.name();
 
         if file_name.contains("..") || file_name.starts_with('/') || file_name.contains("../") {
-            return Err(DomainError::ValidationError(
-                format!("ZIP archive contains dangerous file path: {}", file_name),
-            ));
+            return Err(DomainError::ValidationError(format!(
+                "ZIP archive contains dangerous file path: {}",
+                file_name
+            )));
         }
     }
 
@@ -68,8 +73,9 @@ pub fn is_valid_apk_file(file_path: &str) -> Result<bool, DomainError> {
         return Ok(false);
     }
 
-    let file = std::fs::File::open(file_path)
-        .map_err(|e| DomainError::FileSystemError(format!("Cannot open file for validation: {}", e)))?;
+    let file = std::fs::File::open(file_path).map_err(|e| {
+        DomainError::FileSystemError(format!("Cannot open file for validation: {}", e))
+    })?;
 
     let archive = match ZipArchive::new(file) {
         Ok(archive) => archive,
@@ -85,8 +91,9 @@ pub fn is_valid_apk_file(file_path: &str) -> Result<bool, DomainError> {
 
 /// Helper function to check if a file is a ZIP file by magic number
 pub fn is_zip_file(file_path: &str) -> Result<bool, DomainError> {
-    let mut file = std::fs::File::open(file_path)
-        .map_err(|e| DomainError::FileSystemError(format!("Cannot open file for ZIP check: {}", e)))?;
+    let mut file = std::fs::File::open(file_path).map_err(|e| {
+        DomainError::FileSystemError(format!("Cannot open file for ZIP check: {}", e))
+    })?;
 
     let mut magic = [0u8; 4];
     file.read_exact(&mut magic)
@@ -110,18 +117,18 @@ pub fn validate_package_name(package_name: &str) -> Result<(), DomainError> {
     }
 
     if !PACKAGE_REGEX.is_match(package_name) {
-        return Err(DomainError::InvalidPackageName(
-            format!("Invalid package name format: {}", package_name),
-        ));
+        return Err(DomainError::InvalidPackageName(format!(
+            "Invalid package name format: {}",
+            package_name
+        )));
     }
 
     // Check for dangerous sequences
-    if package_name.contains("..") ||
-       package_name.contains("/") ||
-       package_name.contains("\\") {
-        return Err(DomainError::InvalidPackageName(
-            format!("Package name contains invalid characters: {}", package_name),
-        ));
+    if package_name.contains("..") || package_name.contains("/") || package_name.contains("\\") {
+        return Err(DomainError::InvalidPackageName(format!(
+            "Package name contains invalid characters: {}",
+            package_name
+        )));
     }
 
     Ok(())
@@ -156,7 +163,11 @@ mod tests {
         ];
 
         for name in valid_names {
-            assert!(validate_package_name(name).is_ok(), "Expected '{}' to be valid", name);
+            assert!(
+                validate_package_name(name).is_ok(),
+                "Expected '{}' to be valid",
+                name
+            );
         }
     }
 
@@ -185,7 +196,11 @@ mod tests {
         ];
 
         for name in invalid_names {
-            assert!(validate_package_name(name).is_err(), "Expected '{}' to be invalid", name);
+            assert!(
+                validate_package_name(name).is_err(),
+                "Expected '{}' to be invalid",
+                name
+            );
         }
     }
 
@@ -296,7 +311,8 @@ mod tests {
         {
             let mut file = File::create(&zip_path).unwrap();
             file.write_all(&[0x50, 0x4B, 0x03, 0x04]).unwrap();
-            file.write_all(&[0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
+            file.write_all(&[0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+                .unwrap();
         }
 
         let _ = validate_zip_file(zip_path.to_str().unwrap());
