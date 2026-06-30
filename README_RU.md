@@ -1,120 +1,157 @@
 # Загрузчик приложений RuStore
 
-Приложение на Rust для загрузки APK файлов с RuStore.ru с соблюдением принципов чистой архитектуры.
+Консольная утилита на Rust для скачивания APK-файлов с RuStore.ru и получения метаданных приложений.
 
-## Особенности
+## Возможности
 
-- Загрузка APK файлов из RuStore с использованием официального API
-- Реализация чистой архитектуры с разделением ответственности
-- Проверка имени пакета для предотвращения атак с перехватом пути
-- Проверка целостности файлов с использованием хэшей SHA-256
-- Проверка и распаковка ZIP-архивов
-- Проверка APK файлов
-
-## Архитектура
-
-Приложение следует принципам чистой архитектуры с тремя основными уровнями и модулем утилит:
-
-### Уровень домена (`src/domain.rs`)
-- Содержит бизнес-сущности и интерфейсы
-- Определяет трейт `AppRepository` для абстракции репозитория
-- Содержит типы ошибок
-
-### Уровень приложения (`src/application.rs`)
-- Содержит оркестрацию бизнес-логики
-- Реализует `AppDownloadService` для координации операций
-
-### Уровень инфраструктуры (`src/infrastructure.rs`)
-- Обрабатывает внешние задачи, такие как HTTP-запросы и операции с файлами
-- Реализует трейт `AppRepository` с взаимодействием с API RuStore
-- Управляет сетевыми запросами и файловыми операциями
-
-### Утилиты (`src/util.rs`)
-- Содержит вспомогательные функции для работы с файлами
-- Проверка имени пакета
-- Хеширование файлов (SHA-256)
-- Проверка ZIP и APK файлов
+- Загрузка APK с RuStore с индикацией прогресса
+- Просмотр информации о приложении без скачивания (`--info`, `-v`, `--json-info`)
+- Вывод в JSON для скриптов и автоматизации
+- Проверка целостности файлов по SHA-256
+- Обработка ZIP-архивов (RuStore заворачивает APK в ZIP)
+- Автоматическая очистка временных файлов при ошибках
+- Защита от path traversal атак
+- TLS с системными сертификатами (Windows, Linux, macOS)
 
 ## Использование
 
-### Прямой запуск с помощью Cargo
+### Скачивание APK
 
 ```bash
-cargo run -- <package_name> <download_path>
+rustore_apk_downloader <package> <path>
+# или через cargo:
+cargo run -- <package> <path>
 ```
 
 Пример:
 ```bash
-cargo run -- ru.yandex.searchplugin ./downloads
+rustore_apk_downloader ru.yandex.yandexmaps ./downloads
 ```
 
-### Сборка и запуск
+### Просмотр метаданных (без скачивания)
 
-Сначала соберите приложение:
+```bash
+# Полная информация
+rustore_apk_downloader --info ru.yandex.yandexmaps    # или -i
+
+# Только версия
+rustore_apk_downloader -v ru.yandex.yandexmaps
+
+# JSON для скриптов
+rustore_apk_downloader --json-info ru.yandex.yandexmaps | jq .rating
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq '.rating.average'
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq '{name: .app_name, ver: .version_name, size_mb: (.file_size / 1048576 | floor)}'
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq -r '.signature'
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq -r '.whats_new'
+rustore_apk_downloader -j ru.yandex.yandexmaps > app.json
+```
+
+### Флаги
+
+| Флаг | Описание |
+|------|----------|
+| `-h`, `--help` | Показать справку |
+| `-V`, `--version` | Версия программы |
+| `-i`, `--info` | Информация о приложении без скачивания |
+| `-v` | Версия приложения (название + код) |
+| `-j`, `--json-info` | Информация в JSON |
+
+## Скрипты с jq
+
+```bash
+# Строка с версией
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq -r '"v\(.version_name) (\(.version_code))"'
+
+# Рейтинг с количеством голосов
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq '"\(.rating.average)/5 (\(.rating.votes) голосов)"'
+
+# Размер в МБ
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq '"\(.file_size) байт ≈ \(.file_size / 1048576 | floor) МБ"'
+
+# Проверить существование пакета
+rustore_apk_downloader -j ru.yandex.yandexmaps > /dev/null && echo "существует"
+
+# Сохранить метаданные и скачать отдельно
+rustore_apk_downloader -j ru.yandex.yandexmaps > meta.json
+rustore_apk_downloader ru.yandex.yandexmaps ./out
+
+# Проверить версии нескольких пакетов
+for pkg in ru.yandex.yandexmaps com.example.app; do
+  ver=$(rustore_apk_downloader -j "$pkg" 2>/dev/null | jq -r .version_name)
+  echo "$pkg → $ver"
+done
+```
+
+## Сборка
 
 ```bash
 cargo build --release
 ```
 
-Затем запустите скомпилированный бинарный файл:
+### Кроссплатформенная сборка
 
 ```bash
-./target/release/rustore_apk_downloader <package_name> <download_path>
+make install-targets    # установка cross и rustup целей
+make linux              # x86_64 + aarch64
+make windows            # x86_64
+make all                # все платформы
 ```
 
-### Кроссплатформенная сборка с помощью Make
-
-Используйте предоставленный Makefile для сборки под различные платформы:
-
+На macOS — нативная сборка:
 ```bash
-# Собрать для всех поддерживаемых платформ
-make all
-
-# Собрать только для Linux
-make linux
-
-# Собрать только для Windows
-make windows
-
-# Собрать только для macOS
-make macos
+make macos-native       # x86_64 + aarch64
+cargo build --release   # или напрямую
 ```
 
-Собранные бинарные файлы будут помещены в каталог `builds/`.
+Бинарники помещаются в `builds/`. Архивы включают версию: `RuStore_ApkDownloader_v1.1.0_linux-x86_64.tar.gz`.
+
+> **Примечание:** для Linux x86_64 используется нативный `cargo build` вместо `cross build` из-за бага GCC (memcmp) в Docker-образе cross. CI-воркфлоу (`release.yml`) учитывает это автоматически.
+
+## Архитектура
+
+```
+src/
+  main.rs            # Точка входа и диспетчеризация
+  cli.rs             # Парсинг аргументов (enum Action)
+  display.rs         # Форматирование вывода (справка, информация)
+  domain.rs          # AppInfo, DomainError, трейт AppRepository
+  application.rs     # AppDownloadService — оркестрация
+  infrastructure.rs  # RuStoreDownloader — HTTP, файлы, ZIP
+  util.rs            # SHA-256, валидация, проверки ZIP/APK
+```
+
+| Слой | Файл | Назначение |
+|------|------|------------|
+| Domain | `domain.rs` | `AppInfo`, `Rating`, `DomainError`, `AppRepository` |
+| Application | `application.rs` | `AppDownloadService<R: AppRepository>` |
+| Infrastructure | `infrastructure.rs` | `RuStoreDownloader` — API, загрузка, ZIP |
+| CLI | `cli.rs` | Парсинг аргументов, `Action` |
+| Display | `display.rs` | `print_help()`, `print_app_info()` |
+| Utility | `util.rs` | Хеширование, валидация, проверки ZIP/APK |
 
 ## Зависимости
 
-- `reqwest`: HTTP-клиент с поддержкой TLS
-- `tokio`: Асинхронный движок выполнения
-- `serde`: Сериализация/десериализация
-- `zip`: Обработка ZIP-архивов
-- `sha2`: Криптографические хэш-функции
-- `regex`: Регулярные выражения для проверки
-- `log` и `env_logger`: Функциональность ведения журнала
+- `reqwest` 0.13 + `rustls` (чистый Rust TLS, системные сертификаты)
+- `tokio` 1.52 (асинхронный рантайм)
+- `serde` / `serde_json` (сериализация)
+- `zip` 8.6 (работа с ZIP-архивами)
+- `sha2` 0.11 (SHA-256)
+- `regex` 1.12 (валидация имени пакета)
+- `log` + `env_logger` (логирование)
 
-## Особенности безопасности
+## Безопасность
 
-- Проверка имени пакета для предотвращения атак с перехватом пути
-- Проверка ZIP-архивов для предотвращения вредоносных архивов
-- Проверка APK файлов для обеспечения загрузки законных файлов
-- Безопасная обработка временных файлов
-- Безопасная нормализация путей
+- Валидация имени пакета (защита от path traversal)
+- Проверка ZIP-архивов на опасные пути
+- Проверка APK по содержимому (AndroidManifest.xml + classes.dex)
+- TempFileGuard — автоудаление временных файлов при ошибках
+- Нормализация путей через `std::path::absolute()`
 
 ## Совместимость с Windows
 
-Приложение было протестировано на Windows, но могут возникать проблемы с сохранением файлов на файловую систему из-за различий в обработке путей между операционными системами.
+Приложение использует `rustls` с нативными сертификатами (SChannel), проблем с сертификатами российских УЦ нет.
 
-### Возможные проблемы и решения:
-
-1. **Проблемы с путями**: Windows использует обратные слэши (`\`) и буквы дисков (C:\), что может вызывать проблемы при нормализации путей.
-   
-   Решение: Используйте абсолютные пути при указании каталога загрузки, например: `C:\Downloads`
-
-2. **Права доступа**: В Windows могут быть ограничения на запись в определенные каталоги без прав администратора.
-
-   Решение: Убедитесь, что у вас есть права на запись в указанный каталог, или используйте пользовательские каталоги (например, `%USERPROFILE%\Downloads`)
-
-Для получения дополнительной информации см. файл `README_WINDOWS.md`.
+При указании пути загрузки используйте абсолютные пути: `C:\Downloads`. Подробнее см. `README_WINDOWS.md`.
 
 ## Лицензия
 
