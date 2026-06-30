@@ -99,7 +99,6 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl AppRepository for MockRepository {
         async fn get_app_info(&self, _package_name: &str) -> Result<AppInfo, DomainError> {
             self.call_count.fetch_add(1, Ordering::SeqCst);

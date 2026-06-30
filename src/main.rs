@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     // Validate package name first
     util::validate_package_name(package_name)?;
 
-    let downloader = infrastructure::RuStoreDownloader::new();
+    let downloader = infrastructure::RuStoreDownloader::new()?;
     let app_service = application::AppDownloadService::new(downloader);
     
     let result = app_service.download_app_by_package_name(package_name, download_path).await;

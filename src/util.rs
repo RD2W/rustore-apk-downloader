@@ -100,15 +100,18 @@ pub fn is_zip_file(file_path: &str) -> Result<bool, DomainError> {
 
 /// Validation utilities for package names
 pub fn validate_package_name(package_name: &str) -> Result<(), DomainError> {
+    use std::sync::LazyLock;
+    static PACKAGE_REGEX: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$").unwrap()
+    });
+
     if package_name.is_empty() {
         return Err(DomainError::InvalidPackageName(
             "Package name must be a non-empty string".to_string(),
         ));
     }
 
-    // Check for valid package name format (com.example.app)
-    let package_regex = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*(\.[a-zA-Z_][a-zA-Z0-9_]*)*$").unwrap();
-    if !package_regex.is_match(package_name) {
+    if !PACKAGE_REGEX.is_match(package_name) {
         return Err(DomainError::InvalidPackageName(
             format!("Invalid package name format: {}", package_name),
         ));

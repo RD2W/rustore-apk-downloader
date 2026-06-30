@@ -12,13 +12,13 @@ pub struct RuStoreDownloader {
 
 impl RuStoreDownloader {
     /// Creates a new instance of the downloader
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, DomainError> {
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30)) // 30 seconds timeout for API calls
+            .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| DomainError::NetworkError(format!("Failed to build HTTP client: {}", e)))?;
             
-        Self { client }
+        Ok(Self { client })
     }
 
     /// Resolves path to absolute form without requiring it to exist.
@@ -60,7 +60,6 @@ impl RuStoreDownloader {
     }
 }
 
-#[async_trait::async_trait]
 impl AppRepository for RuStoreDownloader {
     async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError> {
         log::info!("Attempting to get app info for package: {}", package_name);
@@ -180,19 +179,19 @@ impl AppRepository for RuStoreDownloader {
             version_code: body_info
                 .get("versionCode")
                 .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing versionCode in response".to_string()))? as i32,
+                .ok_or_else(|| DomainError::ApiError("Missing versionCode in response".to_string()))?,
             min_sdk_version: body_info
                 .get("minSdkVersion")
                 .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing minSdkVersion in response".to_string()))? as i32,
+                .ok_or_else(|| DomainError::ApiError("Missing minSdkVersion in response".to_string()))?,
             max_sdk_version: body_info
                 .get("maxSdkVersion")
                 .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing maxSdkVersion in response".to_string()))? as i32,
+                .ok_or_else(|| DomainError::ApiError("Missing maxSdkVersion in response".to_string()))?,
             target_sdk_version: body_info
                 .get("targetSdkVersion")
                 .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing targetSdkVersion in response".to_string()))? as i32,
+                .ok_or_else(|| DomainError::ApiError("Missing targetSdkVersion in response".to_string()))?,
             file_size: body_info
                 .get("fileSize")
                 .and_then(|v| v.as_u64())
@@ -352,21 +351,20 @@ impl AppRepository for RuStoreDownloader {
             
             log::info!("Extracting APK file to: {}", extracted_apk_path);
             
-            // Extract the APK file
+            // Extract the APK file (stream directly to disk to avoid buffering in memory)
             {
                 let mut apk_file_in_zip = archive
                     .by_name(apk_filename)
                     .map_err(|e| DomainError::ValidationError(format!("Cannot find APK in ZIP: {}", e)))?;
-                
-                let mut extracted_apk_data = Vec::new();
-                std::io::copy(&mut apk_file_in_zip, &mut extracted_apk_data)
-                    .map_err(|e| DomainError::FileSystemError(format!("Cannot extract APK from ZIP: {}", e)))?;
-                
-                std::fs::write(&extracted_apk_path, &extracted_apk_data)
+
+                let mut out_file = std::fs::File::create(&extracted_apk_path)
                     .map_err(|e| {
-                        log::error!("Cannot write extracted APK to '{}': {}", extracted_apk_path, e);
-                        DomainError::FileSystemError(format!("Cannot write extracted APK: {}", e))
+                        log::error!("Cannot create APK file '{}': {}", extracted_apk_path, e);
+                        DomainError::FileSystemError(format!("Cannot create APK file: {}", e))
                     })?;
+
+                std::io::copy(&mut apk_file_in_zip, &mut out_file)
+                    .map_err(|e| DomainError::FileSystemError(format!("Cannot extract APK from ZIP: {}", e)))?;
             } // End scope to drop the ZipFile before async operations
             
             log::info!("APK extracted to {}", extracted_apk_path);

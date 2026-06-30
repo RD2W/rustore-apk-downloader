@@ -8,10 +8,10 @@ pub struct AppInfo {
     pub download_url: String,
     pub package_name: String,
     pub version_name: String,
-    pub version_code: i32,
-    pub min_sdk_version: i32,
-    pub max_sdk_version: i32,
-    pub target_sdk_version: i32,
+    pub version_code: i64,
+    pub min_sdk_version: i64,
+    pub max_sdk_version: i64,
+    pub target_sdk_version: i64,
     pub file_size: u64,
     pub icon_url: String,
 }
@@ -50,7 +50,6 @@ pub enum DomainError {
 }
 
 /// Interface for application repository (to be implemented by infrastructure layer)
-#[async_trait::async_trait]
 pub trait AppRepository {
     async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError>;
     async fn download_app(&self, app_info: &AppInfo, download_path: &str) -> Result<String, DomainError>;
