@@ -1,4 +1,4 @@
-use crate::domain::{AppRepository, DomainError};
+use crate::domain::{AppInfo, AppRepository, DomainError};
 
 /// Service that orchestrates the application download process
 pub struct AppDownloadService<R: AppRepository> {
@@ -6,42 +6,26 @@ pub struct AppDownloadService<R: AppRepository> {
 }
 
 impl<R: AppRepository> AppDownloadService<R> {
-    /// Creates a new instance of the service
     pub fn new(repo: R) -> Self {
         Self { repo }
     }
 
-    /// Downloads an app by its package name to the specified path
+    /// Downloads an app by its package name.
+    /// Returns the app metadata and the path to the downloaded APK.
     pub async fn download_app_by_package_name(
         &self,
         package_name: &str,
         download_path: &str,
-    ) -> Result<String, DomainError> {
+    ) -> Result<(AppInfo, String), DomainError> {
         log::info!("Getting app info for package: {}", package_name);
 
-        // Get app information
         let app_info = self.repo.get_app_info(package_name).await?;
         log::info!("Retrieved app info: {}", app_info);
 
-        // Print app information before starting download
-        println!("=== Application Information ===");
-        println!("Package Name: {}", app_info.package_name);
-        println!("Version: {} (Code: {})", app_info.version_name, app_info.version_code);
-        println!("File Size: {} bytes", app_info.file_size);
-        println!("Min SDK Version: {}", app_info.min_sdk_version);
-        println!("Target SDK Version: {}", app_info.target_sdk_version);
-        println!("Max SDK Version: {}", app_info.max_sdk_version);
-        println!("Download URL: {}", app_info.download_url);
-        println!("===============================");
-        println!();
-        println!("Downloading file...");
-        println!();
-
-        // Download the app
         let downloaded_path = self.repo.download_app(&app_info, download_path).await?;
-        
+
         log::info!("Successfully downloaded app to: {}", downloaded_path);
-        Ok(downloaded_path)
+        Ok((app_info, downloaded_path))
     }
 }
 
@@ -127,8 +111,10 @@ mod tests {
             .await;
 
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "/mock/path/app-1.0.0.apk");
-        assert_eq!(service.repo.call_count.load(Ordering::SeqCst), 2); // get_info + download
+        let (info, path) = result.unwrap();
+        assert_eq!(info.package_name, "com.test.app");
+        assert_eq!(path, "/mock/path/app-1.0.0.apk");
+        assert_eq!(service.repo.call_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

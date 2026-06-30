@@ -1,9 +1,43 @@
 use crate::domain::{AppInfo, AppRepository, DomainError};
 use crate::util;
+use serde::Deserialize;
 use tokio::io::AsyncWriteExt;
 use tokio::fs;
 use zip::ZipArchive;
 use futures_util::StreamExt;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OverallInfoResponse {
+    body: AppBody,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppBody {
+    app_id: i64,
+    package_name: String,
+    version_name: String,
+    company_name: Option<String>,
+    version_code: i64,
+    min_sdk_version: i64,
+    max_sdk_version: i64,
+    target_sdk_version: i64,
+    file_size: u64,
+    icon_url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadLinkResponse {
+    body: DownloadLinkBody,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadLinkBody {
+    apk_url: String,
+}
 
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {
@@ -64,7 +98,6 @@ impl AppRepository for RuStoreDownloader {
     async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError> {
         log::info!("Attempting to get app info for package: {}", package_name);
 
-        // Make request to get overall app info
         let url = format!("https://backapi.rustore.ru/applicationData/overallInfo/{}", package_name);
         let response = self.client
             .get(&url)
@@ -82,57 +115,27 @@ impl AppRepository for RuStoreDownloader {
             )));
         }
 
-        let response_text = response
-            .text()
+        let info: OverallInfoResponse = response
+            .json()
             .await
-            .map_err(|e| DomainError::NetworkError(format!("Failed to read response: {}", e)))?;
-
-        let response_json: serde_json::Value = serde_json::from_str(&response_text)
             .map_err(|e| DomainError::ApiError(format!("Invalid response format: {}", e)))?;
 
-        // Extract body info
-        let body_info = response_json
-            .get("body")
-            .ok_or_else(|| DomainError::ApiError("Response missing 'body' field".to_string()))?;
-
-        let app_id = body_info
-            .get("appId")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| DomainError::ApiError("Missing appId in response".to_string()))?;
-
-        let package_name_response = body_info
-            .get("packageName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing packageName in response".to_string()))?
-            .to_string();
-
-        let version_name = body_info
-            .get("versionName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing versionName in response".to_string()))?
-            .to_string();
-
-        let company_name = body_info
-            .get("companyName")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing companyName in response".to_string()))?;
+        let body = info.body;
 
         log::info!(
-            "Successfully found app with package name: {}, version: {}, company: {}",
-            package_name_response, version_name, company_name
+            "Successfully found app: {}, version: {}, company: {}",
+            body.package_name,
+            body.version_name,
+            body.company_name.as_deref().unwrap_or("N/A")
         );
 
-        // Now get download link
-        let download_link_url = "https://backapi.rustore.ru/applicationData/download-link";
-        let download_request_body = serde_json::json!({
-            "appId": app_id,
-            "firstInstall": true
-        });
-
         let download_response = self.client
-            .post(download_link_url)
+            .post("https://backapi.rustore.ru/applicationData/download-link")
             .header("Content-Type", "application/json; charset=utf-8")
-            .json(&download_request_body)
+            .json(&serde_json::json!({
+                "appId": body.app_id,
+                "firstInstall": true
+            }))
             .send()
             .await
             .map_err(|e| DomainError::NetworkError(format!("Download link request failed: {}", e)))?;
@@ -147,63 +150,23 @@ impl AppRepository for RuStoreDownloader {
             )));
         }
 
-        let download_response_text = download_response
-            .text()
+        let dl: DownloadLinkResponse = download_response
+            .json()
             .await
-            .map_err(|e| DomainError::NetworkError(format!("Failed to read download response: {}", e)))?;
-
-        let download_response_json: serde_json::Value = serde_json::from_str(&download_response_text)
             .map_err(|e| DomainError::ApiError(format!("Invalid download response format: {}", e)))?;
 
-        let download_link = download_response_json
-            .get("body")
-            .and_then(|v| v.get("apkUrl"))
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| DomainError::ApiError("Missing download URL in response".to_string()))?
-            .to_string();
-
-        // Create AppInfo from response data
-        let app_info = AppInfo {
+        Ok(AppInfo {
             integration_type: "rustore".to_string(),
-            download_url: download_link,
-            package_name: body_info
-                .get("packageName")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| DomainError::ApiError("Missing packageName in response".to_string()))?
-                .to_string(),
-            version_name: body_info
-                .get("versionName")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| DomainError::ApiError("Missing versionName in response".to_string()))?
-                .to_string(),
-            version_code: body_info
-                .get("versionCode")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing versionCode in response".to_string()))?,
-            min_sdk_version: body_info
-                .get("minSdkVersion")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing minSdkVersion in response".to_string()))?,
-            max_sdk_version: body_info
-                .get("maxSdkVersion")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing maxSdkVersion in response".to_string()))?,
-            target_sdk_version: body_info
-                .get("targetSdkVersion")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| DomainError::ApiError("Missing targetSdkVersion in response".to_string()))?,
-            file_size: body_info
-                .get("fileSize")
-                .and_then(|v| v.as_u64())
-                .ok_or_else(|| DomainError::ApiError("Missing fileSize in response".to_string()))?,
-            icon_url: body_info
-                .get("iconUrl")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| DomainError::ApiError("Missing iconUrl in response".to_string()))?
-                .to_string(),
-        };
-
-        Ok(app_info)
+            download_url: dl.body.apk_url,
+            package_name: body.package_name,
+            version_name: body.version_name,
+            version_code: body.version_code,
+            min_sdk_version: body.min_sdk_version,
+            max_sdk_version: body.max_sdk_version,
+            target_sdk_version: body.target_sdk_version,
+            file_size: body.file_size,
+            icon_url: body.icon_url,
+        })
     }
 
     async fn download_app(&self, app_info: &AppInfo, download_path: &str) -> Result<String, DomainError> {

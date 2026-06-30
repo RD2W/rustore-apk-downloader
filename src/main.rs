@@ -53,8 +53,17 @@ async fn main() -> Result<()> {
     let result = app_service.download_app_by_package_name(package_name, download_path).await;
     
     match result {
-        Ok(path) => {
-            log::info!("Successfully downloaded APK to: {}", path);
+        Ok((app_info, path)) => {
+            println!("=== Application Information ===");
+            println!("Package Name: {}", app_info.package_name);
+            println!("Version: {} (Code: {})", app_info.version_name, app_info.version_code);
+            println!("File Size: {} bytes", app_info.file_size);
+            println!("Min SDK Version: {}", app_info.min_sdk_version);
+            println!("Target SDK Version: {}", app_info.target_sdk_version);
+            println!("Max SDK Version: {}", app_info.max_sdk_version);
+            println!("Download URL: {}", app_info.download_url);
+            println!("===============================");
+            println!();
             println!("Apk downloaded: {}", path);
         },
         Err(e) => {
