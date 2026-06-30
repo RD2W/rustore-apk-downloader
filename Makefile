@@ -70,8 +70,6 @@ linux: build-x86_64-unknown-linux-gnu build-aarch64-unknown-linux-gnu
 
 windows: build-x86_64-pc-windows-gnu
 
-macos: release-x86_64-apple-darwin release-aarch64-apple-darwin
-
 # Для сборки под macOS используйте нативную систему macOS
 macos-native: $(addprefix release-, $(MACOS_TARGETS))
 
@@ -128,7 +126,7 @@ help:
 	@echo "  all              - Собрать для всех поддерживаемых платформ"
 	@echo "  linux            - Собрать для Linux (x86_64, aarch64)"
 	@echo "  windows          - Собрать для Windows (x86_64)"
-	@echo "  macos-native     - Собрать для macOS (x86_64, aarch64) - для выполнения на macOS системе"
+	@echo "  macos-native     - Собрать для macOS (только на macOS системе)"
 	@echo "  clean            - Удалить все собранные файлы"
 	@echo "  install-targets  - Установить целевые архитектуры"
 	@echo "  package          - Упаковать все бинарные файлы в архивы"

@@ -12,7 +12,7 @@ pub async fn calculate_file_hash(file_path: &str) -> Result<String, DomainError>
         .map_err(|e| DomainError::FileSystemError(format!("Cannot open file for hashing: {}", e)))?;
 
     let mut hasher = Sha256::new();
-    let mut buffer = [0; 4096];
+    let mut buffer = [0; 65536];
 
     loop {
         let bytes_read = file
@@ -30,22 +30,20 @@ pub async fn calculate_file_hash(file_path: &str) -> Result<String, DomainError>
     Ok(hasher.finalize().iter().map(|b| format!("{:02x}", b)).collect())
 }
 
-/// Validates if a file is a valid ZIP archive
-pub fn validate_zip_file(zip_path: &str) -> Result<bool, DomainError> {
+/// Validates ZIP archive entries for path traversal safety.
+pub fn validate_zip_file(zip_path: &str) -> Result<(), DomainError> {
     let file = std::fs::File::open(zip_path)
         .map_err(|e| DomainError::FileSystemError(format!("Cannot open ZIP file: {}", e)))?;
 
     let mut archive = ZipArchive::new(file)
         .map_err(|e| DomainError::ValidationError(format!("Invalid ZIP file: {}", e)))?;
 
-    // Test each file in the archive
     for i in 0..archive.len() {
-        let file = archive.by_index(i)
+        let entry = archive.by_index(i)
             .map_err(|e| DomainError::ValidationError(format!("Error reading ZIP entry: {}", e)))?;
 
-        let file_name = file.name();
+        let file_name = entry.name();
 
-        // Check for dangerous paths
         if file_name.contains("..") || file_name.starts_with('/') || file_name.contains("../") {
             return Err(DomainError::ValidationError(
                 format!("ZIP archive contains dangerous file path: {}", file_name),
@@ -53,7 +51,7 @@ pub fn validate_zip_file(zip_path: &str) -> Result<bool, DomainError> {
         }
     }
 
-    Ok(true)
+    Ok(())
 }
 
 /// Checks if a file is a valid APK file (by content, not extension).
@@ -292,22 +290,17 @@ mod tests {
     // ===== validate_zip_file tests =====
 
     #[test]
-    fn test_validate_zip_file_with_valid_zip() {
+    fn test_validate_zip_file_with_minimal_zip() {
         let dir = std::env::temp_dir();
         let zip_path = dir.join("test_valid_zip.zip");
         {
             let mut file = File::create(&zip_path).unwrap();
-            // Minimal ZIP header
             file.write_all(&[0x50, 0x4B, 0x03, 0x04]).unwrap();
-            // Central directory end record (minimal)
             file.write_all(&[0x50, 0x4B, 0x05, 0x06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]).unwrap();
         }
 
-        let result = validate_zip_file(zip_path.to_str().unwrap());
-        // The zip crate might reject our minimal ZIP, but it shouldn't panic
-        assert!(result.is_ok() || result.is_err());
+        let _ = validate_zip_file(zip_path.to_str().unwrap());
 
-        // Cleanup
         std::fs::remove_file(&zip_path).ok();
     }
 

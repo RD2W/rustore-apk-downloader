@@ -9,7 +9,7 @@ mod util;
 fn print_help(program_name: &str) {
     println!("RuStore APK Downloader");
     println!("Author: RD2W");
-    println!("Version: 1.0.0");
+    println!("Version: {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("Usage: {} <package_name> <download_path>", program_name);
     println!();
