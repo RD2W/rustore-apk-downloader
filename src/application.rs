@@ -69,16 +69,23 @@ mod tests {
 
         fn mock_app_info() -> AppInfo {
             AppInfo {
-                integration_type: "rustore".to_string(),
-                download_url: "https://example.com/app.apk".to_string(),
+                app_name: "Test App".to_string(),
                 package_name: "com.test.app".to_string(),
                 version_name: "1.0.0".to_string(),
                 version_code: 1,
+                short_description: "A test app".to_string(),
+                file_size: 1000,
                 min_sdk_version: 21,
                 max_sdk_version: 34,
                 target_sdk_version: 33,
-                file_size: 1000,
                 icon_url: "https://example.com/icon.png".to_string(),
+                download_url: "https://example.com/app.apk".to_string(),
+                integration_type: "rustore".to_string(),
+                rating: None,
+                whats_new: None,
+                age_restriction: None,
+                app_ver_updated_at: None,
+                signature: None,
             }
         }
     }

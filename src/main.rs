@@ -55,15 +55,34 @@ async fn main() -> Result<()> {
     match result {
         Ok((app_info, path)) => {
             println!("=== Application Information ===");
-            println!("Package Name: {}", app_info.package_name);
-            println!("Version: {} (Code: {})", app_info.version_name, app_info.version_code);
-            println!("File Size: {} bytes", app_info.file_size);
-            println!("Min SDK Version: {}", app_info.min_sdk_version);
-            println!("Target SDK Version: {}", app_info.target_sdk_version);
-            println!("Max SDK Version: {}", app_info.max_sdk_version);
-            println!("Download URL: {}", app_info.download_url);
-            println!("===============================");
-            println!();
+            println!("Name:      {}", app_info.app_name);
+            println!("Package:   {}", app_info.package_name);
+            println!("Version:   {} (code: {})", app_info.version_name, app_info.version_code);
+            println!("Size:      {} ({:.2} MB)", app_info.file_size, app_info.file_size as f64 / 1_048_576.0);
+            if let Some(ref rating) = app_info.rating {
+                println!("Rating:    {}", rating);
+            }
+            if let Some(ref age) = app_info.age_restriction {
+                println!("Age:       {}", age);
+            }
+            println!("Min SDK:   {}", app_info.min_sdk_version);
+            println!("Target SDK: {}", app_info.target_sdk_version);
+            if app_info.max_sdk_version > 0 {
+                println!("Max SDK:   {}", app_info.max_sdk_version);
+            }
+            if let Some(ref updated) = app_info.app_ver_updated_at {
+                // Extract date part from ISO 8601 timestamp (e.g. "2026-06-25T11:51:07.320+00:00")
+                let date = updated.split('T').next().unwrap_or(updated);
+                println!("Updated:   {}", date);
+            }
+            if let Some(ref sig) = app_info.signature {
+                println!("Signature: {}", sig);
+            }
+            println!("———————————————");
+            if let Some(ref whats_new) = app_info.whats_new {
+                println!("What's new: {}", whats_new);
+                println!("———————————————");
+            }
             println!("Apk downloaded: {}", path);
         },
         Err(e) => {

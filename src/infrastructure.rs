@@ -16,8 +16,12 @@ struct OverallInfoResponse {
 #[serde(rename_all = "camelCase")]
 struct AppBody {
     app_id: i64,
+    #[serde(rename = "appName")]
+    app_name: String,
     package_name: String,
     version_name: String,
+    #[serde(rename = "shortDescription")]
+    short_description: String,
     company_name: Option<String>,
     version_code: i64,
     min_sdk_version: i64,
@@ -25,6 +29,27 @@ struct AppBody {
     target_sdk_version: i64,
     file_size: u64,
     icon_url: String,
+    #[serde(default)]
+    rating: Option<RatingBody>,
+    #[serde(rename = "whatsNew", default)]
+    whats_new: Option<String>,
+    #[serde(rename = "ageRestriction", default)]
+    age_restriction: Option<AgeRestrictionBody>,
+    #[serde(rename = "appVerUpdatedAt", default)]
+    app_ver_updated_at: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RatingBody {
+    average: f64,
+    votes: u64,
+}
+
+#[derive(Deserialize)]
+struct AgeRestrictionBody {
+    category: String,
 }
 
 #[derive(Deserialize)]
@@ -184,16 +209,26 @@ impl AppRepository for RuStoreDownloader {
             .map_err(|e| DomainError::ApiError(format!("Invalid download response format: {}", e)))?;
 
         Ok(AppInfo {
-            integration_type: "rustore".to_string(),
-            download_url: dl.body.apk_url,
+            app_name: body.app_name,
             package_name: body.package_name,
             version_name: body.version_name,
             version_code: body.version_code,
+            short_description: body.short_description,
+            file_size: body.file_size,
             min_sdk_version: body.min_sdk_version,
             max_sdk_version: body.max_sdk_version,
             target_sdk_version: body.target_sdk_version,
-            file_size: body.file_size,
             icon_url: body.icon_url,
+            download_url: dl.body.apk_url,
+            integration_type: "rustore".to_string(),
+            rating: body.rating.map(|r| crate::domain::Rating {
+                average: r.average,
+                votes: r.votes,
+            }),
+            whats_new: body.whats_new,
+            age_restriction: body.age_restriction.map(|a| a.category),
+            app_ver_updated_at: body.app_ver_updated_at,
+            signature: body.signature,
         })
     }
 

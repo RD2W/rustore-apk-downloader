@@ -1,27 +1,46 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Represents information about an application from RuStore
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rating {
+    pub average: f64,
+    pub votes: u64,
+}
+
+impl fmt::Display for Rating {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:.2} ({} votes)", self.average, self.votes)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
-    pub integration_type: String,
-    pub download_url: String,
+    pub app_name: String,
     pub package_name: String,
     pub version_name: String,
     pub version_code: i64,
+    pub short_description: String,
+    pub file_size: u64,
     pub min_sdk_version: i64,
     pub max_sdk_version: i64,
     pub target_sdk_version: i64,
-    pub file_size: u64,
     pub icon_url: String,
+    pub download_url: String,
+    pub integration_type: String,
+    pub rating: Option<Rating>,
+    pub whats_new: Option<String>,
+    pub age_restriction: Option<String>,
+    pub app_ver_updated_at: Option<String>,
+    pub signature: Option<String>,
 }
 
 impl fmt::Display for AppInfo {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "AppInfo {{ package: {}, version: {}, size: {} bytes }}",
-            self.package_name, self.version_name, self.file_size
+            "{} ({}) v{} — {}",
+            self.app_name, self.package_name, self.version_name,
+            self.short_description
         )
     }
 }
@@ -59,25 +78,36 @@ pub trait AppRepository {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_app_info_display() {
-        let app_info = AppInfo {
-            integration_type: "rustore".to_string(),
-            download_url: "https://example.com/app.apk".to_string(),
+    fn mock_app_info() -> AppInfo {
+        AppInfo {
+            app_name: "Example App".to_string(),
             package_name: "com.example.app".to_string(),
             version_name: "1.2.3".to_string(),
             version_code: 123,
+            short_description: "An example application".to_string(),
+            file_size: 50_000_000,
             min_sdk_version: 21,
             max_sdk_version: 34,
             target_sdk_version: 33,
-            file_size: 50_000_000,
             icon_url: "https://example.com/icon.png".to_string(),
-        };
+            download_url: "https://example.com/app.apk".to_string(),
+            integration_type: "rustore".to_string(),
+            rating: Some(Rating { average: 4.5, votes: 1000 }),
+            whats_new: Some("Bug fixes".to_string()),
+            age_restriction: Some("0+".to_string()),
+            app_ver_updated_at: None,
+            signature: None,
+        }
+    }
+
+    #[test]
+    fn test_app_info_display() {
+        let app_info = mock_app_info();
 
         let display = format!("{}", app_info);
+        assert!(display.contains("Example App"));
         assert!(display.contains("com.example.app"));
         assert!(display.contains("1.2.3"));
-        assert!(display.contains("50000000"));
     }
 
     #[test]
@@ -110,19 +140,7 @@ mod tests {
 
     #[test]
     fn test_app_info_clone() {
-        let app_info = AppInfo {
-            integration_type: "rustore".to_string(),
-            download_url: "https://example.com/app.apk".to_string(),
-            package_name: "com.example.app".to_string(),
-            version_name: "1.0.0".to_string(),
-            version_code: 1,
-            min_sdk_version: 21,
-            max_sdk_version: 34,
-            target_sdk_version: 33,
-            file_size: 1000,
-            icon_url: "https://example.com/icon.png".to_string(),
-        };
-
+        let app_info = mock_app_info();
         let cloned = app_info.clone();
         assert_eq!(cloned.package_name, app_info.package_name);
         assert_eq!(cloned.version_name, app_info.version_name);
@@ -131,21 +149,17 @@ mod tests {
 
     #[test]
     fn test_app_info_debug() {
-        let app_info = AppInfo {
-            integration_type: "rustore".to_string(),
-            download_url: "https://example.com/app.apk".to_string(),
-            package_name: "com.example.app".to_string(),
-            version_name: "1.0.0".to_string(),
-            version_code: 1,
-            min_sdk_version: 21,
-            max_sdk_version: 34,
-            target_sdk_version: 33,
-            file_size: 1000,
-            icon_url: "https://example.com/icon.png".to_string(),
-        };
-
+        let app_info = mock_app_info();
         let debug = format!("{:?}", app_info);
         assert!(debug.contains("AppInfo"));
         assert!(debug.contains("com.example.app"));
+    }
+
+    #[test]
+    fn test_rating_display() {
+        let rating = Rating { average: 4.26, votes: 40474 };
+        let display = format!("{}", rating);
+        assert!(display.contains("4.26"));
+        assert!(display.contains("40474"));
     }
 }
