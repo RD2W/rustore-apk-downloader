@@ -92,7 +92,8 @@ async fn main() -> Result<()> {
     }
     println!("———————————————");
     if let Some(ref whats_new) = app_info.whats_new {
-        println!("What's new: {}", whats_new);
+        println!("What's new:");
+        println!("{}", whats_new);
         println!("———————————————");
     }
     println!();
