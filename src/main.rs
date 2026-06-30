@@ -26,28 +26,23 @@ fn print_help(program_name: &str) {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
 
-    // Check for version flag
-    if args.len() == 2 && (args[1] == "-V" || args[1] == "--version") {
-        println!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
-        std::process::exit(0);
-    }
-
-    // Check for help flags
-    if args.len() == 2 && (args[1] == "-h" || args[1] == "--help") {
-        print_help(&args[0]);
-        std::process::exit(0);
-    }
-
-    if args.len() < 3 {
-        print_help(&args[0]);
-        std::process::exit(1);
-    }
-
-    let package_name = &args[1];
-    let download_path = &args[2];
+    let (package_name, download_path) = match &args[..] {
+        [_, flag] if ["-V", "--version"].contains(&flag.as_str()) => {
+            println!("{} v{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
+        [_, flag] if ["-h", "--help"].contains(&flag.as_str()) => {
+            print_help(&args[0]);
+            std::process::exit(0);
+        }
+        [_, pkg, path] => (pkg.as_str(), path.as_str()),
+        _ => {
+            print_help(&args[0]);
+            std::process::exit(1);
+        }
+    };
 
     log::info!("Starting RuStore download for package: {}", package_name);
 
@@ -91,11 +86,11 @@ async fn main() -> Result<()> {
         println!("Signature: {}", sig);
     }
     println!("———————————————");
-    if let Some(ref whats_new) = app_info.whats_new {
-        println!("What's new:");
-        println!("{}", whats_new);
-        println!("———————————————");
-    }
+            if let Some(ref whats_new) = app_info.whats_new {
+                println!("What's new:");
+                println!("{}", whats_new);
+                println!("———————————————");
+            }
     println!();
 
     println!("Downloading...");
