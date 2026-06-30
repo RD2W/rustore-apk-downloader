@@ -45,11 +45,11 @@ define create_build_dir
 	mkdir -p $(OUTPUT_DIR)/$(1)
 endef
 
-# Сборка для Linux x86_64
+# Сборка для Linux x86_64 (нативный cargo — cross-образ имеет старый GCC с багом memcmp)
 build-x86_64-unknown-linux-gnu:
 	$(call create_build_dir,linux-x86_64)
-	cross build --target x86_64-unknown-linux-gnu --release
-	cp target/x86_64-unknown-linux-gnu/release/$(BINARY_NAME) $(OUTPUT_DIR)/linux-x86_64/$(BINARY_NAME)
+	cargo build --release
+	cp target/release/$(BINARY_NAME) $(OUTPUT_DIR)/linux-x86_64/$(BINARY_NAME)
 	strip $(OUTPUT_DIR)/linux-x86_64/$(BINARY_NAME) 2>/dev/null || true
 
 # Сборка для Linux aarch64
