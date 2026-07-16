@@ -105,12 +105,12 @@ impl Config {
             return Self::from_file(path);
         }
 
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(dir) = exe.parent() {
-                let candidate = dir.join("config.toml");
-                if candidate.is_file() {
-                    return Self::from_file(&candidate.to_string_lossy());
-                }
+        if let Ok(exe) = std::env::current_exe()
+            && let Some(dir) = exe.parent()
+        {
+            let candidate = dir.join("config.toml");
+            if candidate.is_file() {
+                return Self::from_file(&candidate.to_string_lossy());
             }
         }
 
