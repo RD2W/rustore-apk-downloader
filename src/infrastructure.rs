@@ -97,10 +97,10 @@ impl Drop for TempFileGuard {
 
 /// RuStore client version code sent with API requests.
 /// The backend rejects requests without this header (400 Bad Request).
-const RUSTORE_VER_CODE: &str = "1000";
+pub(crate) const RUSTORE_VER_CODE: &str = "1000";
 
 /// Base URL of the RuStore backend API.
-const RUSTORE_BASE_URL: &str = "https://backapi.rustore.ru";
+pub(crate) const RUSTORE_BASE_URL: &str = "https://backapi.rustore.ru";
 
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {

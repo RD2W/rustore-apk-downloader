@@ -2,6 +2,7 @@ use anyhow::Result;
 
 mod application;
 mod cli;
+mod config;
 mod display;
 mod domain;
 mod infrastructure;

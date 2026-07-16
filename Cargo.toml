@@ -9,6 +9,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "s
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.9"
 zip = "8.6.0"
 anyhow = "1.0.103"
 thiserror = "2.0.18"
