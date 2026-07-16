@@ -91,6 +91,71 @@ impl Default for LogConfig {
 
 const ALLOWED_PLACEHOLDERS: [&str; 4] = ["package", "version", "version_code", "app_name"];
 
+impl Config {
+    /// Loads config with lookup order:
+    /// 1. explicit --config path (must exist)
+    /// 2. config.toml next to the binary
+    /// 3. config.toml in the current working directory
+    /// 4. built-in defaults
+    pub fn load(explicit_path: Option<&str>) -> Result<Config, ConfigError> {
+        if let Some(path) = explicit_path {
+            if !std::path::Path::new(path).is_file() {
+                return Err(ConfigError::NotFound(path.to_string()));
+            }
+            return Self::from_file(path);
+        }
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                let candidate = dir.join("config.toml");
+                if candidate.is_file() {
+                    return Self::from_file(&candidate.to_string_lossy());
+                }
+            }
+        }
+
+        if std::path::Path::new("config.toml").is_file() {
+            return Self::from_file("config.toml");
+        }
+
+        Ok(Config::default())
+    }
+
+    /// Reads, parses and validates a specific config file.
+    pub fn from_file(path: &str) -> Result<Config, ConfigError> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| ConfigError::ReadError(path.to_string(), e.to_string()))?;
+
+        let config: Config = toml::from_str(&content)
+            .map_err(|e| ConfigError::ParseError(path.to_string(), e.to_string()))?;
+
+        config.validate(path)?;
+        log::info!("Loaded config from {}", path);
+        Ok(config)
+    }
+
+    fn validate(&self, path: &str) -> Result<(), ConfigError> {
+        validate_template(&self.download.file_name_template).map_err(|e| match e {
+            ConfigError::ValidationError(_, msg) => {
+                ConfigError::ValidationError(path.to_string(), msg)
+            }
+            other => other,
+        })?;
+
+        self.log.level.parse::<log::LevelFilter>().map_err(|_| {
+            ConfigError::ValidationError(
+                path.to_string(),
+                format!(
+                    "invalid log.level '{}'; allowed: off, error, warn, info, debug, trace",
+                    self.log.level
+                ),
+            )
+        })?;
+
+        Ok(())
+    }
+}
+
 /// Checks that a file name template contains only known placeholders.
 pub fn validate_template(template: &str) -> Result<(), ConfigError> {
     let re = regex::Regex::new(r"\{([^{}]*)\}").expect("static regex");
@@ -146,6 +211,62 @@ fn sanitize_component(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_temp_config(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn test_load_explicit_path_missing_is_error() {
+        let err = Config::load(Some("/nonexistent/rustore-test-config.toml")).unwrap_err();
+        assert!(matches!(err, ConfigError::NotFound(_)));
+    }
+
+    #[test]
+    fn test_load_explicit_path_parses_file() {
+        let path = write_temp_config(
+            "rustore-test-load-ok.toml",
+            "[api]\nrustore_ver_code = \"2000\"\n",
+        );
+        let c = Config::load(Some(path.to_str().unwrap())).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(c.api.rustore_ver_code, "2000");
+    }
+
+    #[test]
+    fn test_load_broken_file_is_parse_error() {
+        let path = write_temp_config("rustore-test-load-broken.toml", "[api\n");
+        let result = Config::load(Some(path.to_str().unwrap()));
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(result.unwrap_err(), ConfigError::ParseError(_, _)));
+    }
+
+    #[test]
+    fn test_load_invalid_template_is_validation_error() {
+        let path = write_temp_config(
+            "rustore-test-load-badtpl.toml",
+            "[download]\nfile_name_template = \"{bad}.apk\"\n",
+        );
+        let result = Config::load(Some(path.to_str().unwrap()));
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::ValidationError(_, _)
+        ));
+    }
+
+    #[test]
+    fn test_load_invalid_log_level_is_validation_error() {
+        let path = write_temp_config("rustore-test-load-badlog.toml", "[log]\nlevel = \"loud\"\n");
+        let result = Config::load(Some(path.to_str().unwrap()));
+        std::fs::remove_file(&path).unwrap();
+        assert!(matches!(
+            result.unwrap_err(),
+            ConfigError::ValidationError(_, _)
+        ));
+    }
 
     #[test]
     fn test_default_config_matches_current_behavior() {
