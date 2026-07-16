@@ -24,7 +24,8 @@ async fn main() -> Result<()> {
 
     util::validate_package_name(&pkg)?;
 
-    let downloader = infrastructure::RuStoreDownloader::new()?;
+    let config = config::Config::load(None)?;
+    let downloader = infrastructure::RuStoreDownloader::new(&config)?;
     let app_service = application::AppDownloadService::new(downloader);
 
     match action {

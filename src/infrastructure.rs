@@ -106,19 +106,25 @@ pub(crate) const RUSTORE_BASE_URL: &str = "https://backapi.rustore.ru";
 pub struct RuStoreDownloader {
     client: reqwest::Client,
     base_url: String,
+    download_timeout_secs: u64,
+    file_name_template: String,
 }
 
 impl RuStoreDownloader {
-    /// Creates a new instance of the downloader
-    pub fn new() -> Result<Self, DomainError> {
+    /// Creates a new instance of the downloader configured via Config.
+    pub fn new(config: &crate::config::Config) -> Result<Self, DomainError> {
+        let ver_code = reqwest::header::HeaderValue::from_str(&config.api.rustore_ver_code)
+            .map_err(|e| {
+                DomainError::ValidationError(format!("Invalid api.rustore_ver_code: {}", e))
+            })?;
+
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            "ruStoreVerCode",
-            reqwest::header::HeaderValue::from_static(RUSTORE_VER_CODE),
-        );
+        headers.insert("ruStoreVerCode", ver_code);
 
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(
+                config.network.request_timeout_secs,
+            ))
             .default_headers(headers)
             .build()
             .map_err(|e| {
@@ -127,7 +133,9 @@ impl RuStoreDownloader {
 
         Ok(Self {
             client,
-            base_url: RUSTORE_BASE_URL.to_string(),
+            base_url: config.api.base_url.clone(),
+            download_timeout_secs: config.network.download_timeout_secs,
+            file_name_template: config.download.file_name_template.clone(),
         })
     }
 
@@ -306,7 +314,7 @@ impl AppRepository for RuStoreDownloader {
         let response = self
             .client
             .get(&app_info.download_url)
-            .timeout(std::time::Duration::from_secs(300)) // 5 minutes timeout for download
+            .timeout(std::time::Duration::from_secs(self.download_timeout_secs))
             .send()
             .await
             .map_err(|e| DomainError::NetworkError(format!("Download request failed: {}", e)))?;
@@ -432,7 +440,7 @@ impl AppRepository for RuStoreDownloader {
 
             // Create safe path for extracted APK
             let extracted_apk_filename =
-                format!("{}-{}.apk", app_info.package_name, app_info.version_name);
+                crate::config::render_file_name(&self.file_name_template, app_info);
             let extracted_apk_path = std::path::Path::new(&sanitized_download_path)
                 .join(&extracted_apk_filename)
                 .to_string_lossy()
@@ -492,9 +500,9 @@ impl AppRepository for RuStoreDownloader {
 
             // Rename the temporary file to APK
             let final_file_path = std::path::Path::new(&sanitized_download_path)
-                .join(format!(
-                    "{}-{}.apk",
-                    app_info.package_name, app_info.version_name
+                .join(crate::config::render_file_name(
+                    &self.file_name_template,
+                    app_info,
                 ))
                 .to_string_lossy()
                 .to_string();
@@ -546,16 +554,48 @@ mod tests {
             request
         });
 
-        let mut downloader = RuStoreDownloader::new().unwrap();
-        downloader.base_url = format!("http://{}", addr);
+        let mut config = crate::config::Config::default();
+        config.api.base_url = format!("http://{}", addr);
+        config.api.rustore_ver_code = "1000".to_string();
+        let downloader = RuStoreDownloader::new(&config).unwrap();
 
         let _ = downloader.get_app_info("ru.example.app").await;
 
         let request = server.await.unwrap();
-        let expected_header = format!("rustorevercode: {}", RUSTORE_VER_CODE);
         assert!(
-            request.to_lowercase().contains(&expected_header),
+            request.to_lowercase().contains("rustorevercode: 1000"),
             "Request must include ruStoreVerCode header. Actual request:\n{}",
+            request
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rustore_ver_code_header_value_comes_from_config() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            let response =
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+
+        let mut config = crate::config::Config::default();
+        config.api.base_url = format!("http://{}", addr);
+        config.api.rustore_ver_code = "9999".to_string();
+        let downloader = RuStoreDownloader::new(&config).unwrap();
+
+        let _ = downloader.get_app_info("ru.example.app").await;
+
+        let request = server.await.unwrap();
+        assert!(
+            request.to_lowercase().contains("rustorevercode: 9999"),
+            "Header must use configured value. Actual request:\n{}",
             request
         );
     }
