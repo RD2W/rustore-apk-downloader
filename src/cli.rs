@@ -60,7 +60,7 @@ fn parse_action(args: &[String]) -> Action {
             package: pkg.clone(),
             path: None,
         },
-        [_, pkg, path] if !pkg.starts_with('-') => Action::Download {
+        [_, pkg, path] if !pkg.starts_with('-') && !path.starts_with('-') => Action::Download {
             package: pkg.clone(),
             path: Some(path.clone()),
         },

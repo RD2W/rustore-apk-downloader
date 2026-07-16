@@ -130,7 +130,7 @@ impl Config {
             .map_err(|e| ConfigError::ParseError(path.to_string(), e.to_string()))?;
 
         config.validate(path)?;
-        log::info!("Loaded config from {}", path);
+        eprintln!("Loaded config from {}", path);
         Ok(config)
     }
 
