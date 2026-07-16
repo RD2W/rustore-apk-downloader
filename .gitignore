@@ -1,6 +1,5 @@
 /builds
 /target
-Cargo.lock
 *.rs.bk
 **/*.so
 **/*.dylib
