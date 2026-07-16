@@ -95,22 +95,40 @@ impl Drop for TempFileGuard {
     }
 }
 
+/// RuStore client version code sent with API requests.
+/// The backend rejects requests without this header (400 Bad Request).
+const RUSTORE_VER_CODE: &str = "1000";
+
+/// Base URL of the RuStore backend API.
+const RUSTORE_BASE_URL: &str = "https://backapi.rustore.ru";
+
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl RuStoreDownloader {
     /// Creates a new instance of the downloader
     pub fn new() -> Result<Self, DomainError> {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            "ruStoreVerCode",
+            reqwest::header::HeaderValue::from_static(RUSTORE_VER_CODE),
+        );
+
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .default_headers(headers)
             .build()
             .map_err(|e| {
                 DomainError::NetworkError(format!("Failed to build HTTP client: {}", e))
             })?;
 
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            base_url: RUSTORE_BASE_URL.to_string(),
+        })
     }
 
     /// Resolves path to absolute form without requiring it to exist.
@@ -156,8 +174,8 @@ impl AppRepository for RuStoreDownloader {
         log::info!("Attempting to get app info for package: {}", package_name);
 
         let url = format!(
-            "https://backapi.rustore.ru/applicationData/overallInfo/{}",
-            package_name
+            "{}/applicationData/overallInfo/{}",
+            self.base_url, package_name
         );
         let response = self
             .client
@@ -192,7 +210,7 @@ impl AppRepository for RuStoreDownloader {
 
         let download_response = self
             .client
-            .post("https://backapi.rustore.ru/applicationData/download-link")
+            .post(format!("{}/applicationData/download-link", self.base_url))
             .header("Content-Type", "application/json; charset=utf-8")
             .json(&serde_json::json!({
                 "appId": body.app_id,
@@ -504,5 +522,41 @@ impl AppRepository for RuStoreDownloader {
 
             Ok(util::clean_windows_path(&final_file_path))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn test_get_app_info_sends_rustore_ver_code_header() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = vec![0u8; 8192];
+            let n = socket.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            let response =
+                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            socket.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+
+        let mut downloader = RuStoreDownloader::new().unwrap();
+        downloader.base_url = format!("http://{}", addr);
+
+        let _ = downloader.get_app_info("ru.example.app").await;
+
+        let request = server.await.unwrap();
+        let expected_header = format!("rustorevercode: {}", RUSTORE_VER_CODE);
+        assert!(
+            request.to_lowercase().contains(&expected_header),
+            "Request must include ruStoreVerCode header. Actual request:\n{}",
+            request
+        );
     }
 }
