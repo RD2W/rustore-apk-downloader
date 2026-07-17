@@ -24,7 +24,7 @@ MACOS_TARGETS = \
 # Все цели, кроме macOS (так как они не могут быть собраны на Linux)
 TARGETS = $(LINUX_TARGETS) $(WINDOWS_TARGETS)
 
-.PHONY: all clean linux windows
+.PHONY: all clean linux windows linux-upx linux-x86_64-upx linux-aarch64-upx
 
 all: $(addprefix build-, $(TARGETS))
 
@@ -63,6 +63,18 @@ build-x86_64-pc-windows-gnu:
 linux: build-x86_64-unknown-linux-gnu build-aarch64-unknown-linux-gnu
 
 windows: build-x86_64-pc-windows-gnu
+
+# ---- UPX-сжатые сборки (только Linux) ----
+
+# UPX versions of local builds — run `linux` first, then compress.
+# Gracefully skips if upx is not installed.
+linux-x86_64-upx: build-x86_64-unknown-linux-gnu
+	upx --best $(OUTPUT_DIR)/linux-x86_64/$(BINARY_NAME) 2>/dev/null || { echo "UPX not installed, skipping compression"; }
+
+linux-aarch64-upx: build-aarch64-unknown-linux-gnu
+	upx --best $(OUTPUT_DIR)/linux-aarch64/$(BINARY_NAME) 2>/dev/null || { echo "UPX not installed, skipping compression"; }
+
+linux-upx: linux-x86_64-upx linux-aarch64-upx
 
 # ---- release-*: CI/релизные сборки (с --locked) ----
 
@@ -123,11 +135,14 @@ install-targets:
 
 help:
 	@echo "Доступные цели:"
-	@echo "  all              - Собрать для всех поддерживаемых платформ"
-	@echo "  linux            - Собрать для Linux (x86_64, aarch64)"
-	@echo "  windows          - Собрать для Windows (x86_64)"
-	@echo "  macos-native     - Собрать для macOS (только на macOS системе)"
-	@echo "  clean            - Удалить все собранные файлы"
-	@echo "  install-targets  - Установить целевые архитектуры"
-	@echo "  package          - Собрать всё и упаковать в архивы (tar.gz / zip)"
-	@echo "  help             - Показать это сообщение"
+	@echo "  all               - Собрать для всех поддерживаемых платформ"
+	@echo "  linux             - Собрать для Linux (x86_64, aarch64)"
+	@echo "  windows           - Собрать для Windows (x86_64)"
+	@echo "  linux-x86_64-upx  - Linux x86_64 + UPX сжатие"
+	@echo "  linux-aarch64-upx - Linux aarch64 + UPX сжатие"
+	@echo "  linux-upx         - Linux (обе арх.) + UPX сжатие"
+	@echo "  macos-native      - Собрать для macOS (только на macOS системе)"
+	@echo "  clean             - Удалить все собранные файлы"
+	@echo "  install-targets   - Установить целевые архитектуры"
+	@echo "  package           - Собрать всё и упаковать в архивы (tar.gz / zip)"
+	@echo "  help              - Показать это сообщение"
