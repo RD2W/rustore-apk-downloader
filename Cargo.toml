@@ -1,7 +1,7 @@
 [package]
 authors = ["RD2W"]
 name = "rustore_apk_downloader"
-version = "1.2.1"
+version = "1.3.0"
 edition = "2024"
 
 [dependencies]
@@ -9,7 +9,7 @@ reqwest = { version = "0.13.4", default-features = false, features = ["json", "s
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "fs", "io-util"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.9"
+toml = "1"
 zip = "8.6.0"
 anyhow = "1.0.103"
 thiserror = "2.0.18"

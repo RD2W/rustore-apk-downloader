@@ -174,7 +174,7 @@ src/
 - `zip` 8.6 (ZIP archive handling)
 - `sha2` 0.11 (SHA-256 hashing)
 - `regex` 1.12 (package name validation)
-- `toml` 0.9 (config file parsing)
+- `toml` 1 (config file parsing)
 - `log` + `env_logger` (logging)
 
 ## License
