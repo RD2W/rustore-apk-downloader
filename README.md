@@ -18,9 +18,10 @@ A Rust CLI for downloading APK files from RuStore.ru and querying app metadata.
 ### Download an APK
 
 ```bash
-rustore_apk_downloader <package> <path>
+rustore_apk_downloader <package> [path]
+# path is optional — falls back to config.toml download.default_path
 # or with cargo:
-cargo run -- <package> <path>
+cargo run -- <package> [path]
 ```
 
 Example:
@@ -55,6 +56,38 @@ rustore_apk_downloader -j ru.yandex.yandexmaps > app.json
 | `-i`, `--info` | Full app info without download |
 | `-v` | App version (name + code) |
 | `-j`, `--json-info` | App info as JSON |
+| `--config <path>` | Use a specific config.toml |
+
+## Configuration (config.toml)
+
+An optional `config.toml` allows overriding settings without rebuilding. The tool
+looks for it in this order:
+
+1. `--config <path>` (must exist)
+2. `config.toml` next to the binary
+3. `config.toml` in the current working directory
+4. Built-in defaults
+
+Every key is optional; omitted keys use the defaults shown in `config.example.toml`:
+
+```toml
+[api]
+base_url = "https://backapi.rustore.ru"
+rustore_ver_code = "1000"
+
+[network]
+request_timeout_secs = 30
+download_timeout_secs = 300
+
+[download]
+default_path = "./downloads"
+# Placeholders: {package}, {version}, {version_code}, {app_name}
+file_name_template = "{package}-{version}.apk"
+
+[log]
+# off | error | warn | info | debug | trace  (RUST_LOG env var overrides this)
+level = "error"
+```
 
 ## Scripting with jq
 
@@ -95,6 +128,7 @@ make install-targets    # one-time: install cross and rustup targets
 make linux              # x86_64 + aarch64
 make windows            # x86_64
 make all                # all platforms
+make linux-upx          # linux + UPX compression (2.7 MB per binary)
 ```
 
 On macOS, build natively:
@@ -117,7 +151,8 @@ src/
   domain.rs          # AppInfo, DomainError, AppRepository trait
   application.rs     # AppDownloadService orchestrator
   infrastructure.rs  # RuStoreDownloader: HTTP, file ops, ZIP extraction
-  util.rs            # SHA-256, package validation, ZIP/APK checks
+  config.rs           # Config structs, config.toml loading/validation
+  util.rs             # SHA-256, package validation, ZIP/APK checks
 
 ```
 
@@ -129,6 +164,7 @@ src/
 | CLI | `cli.rs` | Argument parsing, `Action` enum |
 | Display | `display.rs` | `print_help()`, `print_app_info()` |
 | Utility | `util.rs` | Hashing, package validation, ZIP/APK checks |
+| Utility | `config.rs` | `Config` structs, config.toml loading, template rendering |
 
 ## Dependencies
 
@@ -138,6 +174,7 @@ src/
 - `zip` 8.6 (ZIP archive handling)
 - `sha2` 0.11 (SHA-256 hashing)
 - `regex` 1.12 (package name validation)
+- `toml` 1 (config file parsing)
 - `log` + `env_logger` (logging)
 
 ## License

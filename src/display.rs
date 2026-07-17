@@ -7,7 +7,7 @@ pub fn print_help(program_name: &str) {
     println!();
     println!("Usage:");
     println!(
-        "  {} <package> <path>          Download an APK",
+        "  {} <package> [path]          Download an APK (path defaults to config)",
         program_name
     );
     println!(
@@ -29,6 +29,7 @@ pub fn print_help(program_name: &str) {
     println!("  -i, --info          App info without downloading");
     println!("  -v                  App version (short)");
     println!("  -j, --json-info     App info as JSON");
+    println!("  --config <path>     Use a specific config.toml");
 }
 
 pub fn print_app_info(info: &domain::AppInfo) {

@@ -1,0 +1,20 @@
+# rustore-apk-downloader configuration.
+# Copy to `config.toml` next to the binary (or pass --config <path>).
+# Every key is optional; omitted keys use the defaults shown below.
+
+[api]
+base_url = "https://backapi.rustore.ru"
+rustore_ver_code = "1000"
+
+[network]
+request_timeout_secs = 30
+download_timeout_secs = 300
+
+[download]
+default_path = "./downloads"
+# Placeholders: {package}, {version}, {version_code}, {app_name}
+file_name_template = "{package}-{version}.apk"
+
+[log]
+# off | error | warn | info | debug | trace  (RUST_LOG env var overrides this)
+level = "error"

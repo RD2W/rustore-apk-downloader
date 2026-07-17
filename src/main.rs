@@ -2,6 +2,7 @@ use anyhow::Result;
 
 mod application;
 mod cli;
+mod config;
 mod display;
 mod domain;
 mod infrastructure;
@@ -9,11 +10,15 @@ mod util;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
-
     let args: Vec<String> = std::env::args().collect();
-    let action = cli::parse_args(&args);
+    let parsed = cli::parse_args(&args);
 
+    let config = config::Config::load(parsed.config_path.as_deref())?;
+
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(&config.log.level))
+        .init();
+
+    let action = parsed.action;
     let pkg = match &action {
         cli::Action::Info(pkg) | cli::Action::ApkVersion(pkg) | cli::Action::JsonInfo(pkg) => {
             pkg.clone()
@@ -23,7 +28,7 @@ async fn main() -> Result<()> {
 
     util::validate_package_name(&pkg)?;
 
-    let downloader = infrastructure::RuStoreDownloader::new()?;
+    let downloader = infrastructure::RuStoreDownloader::new(&config)?;
     let app_service = application::AppDownloadService::new(downloader);
 
     match action {
@@ -42,6 +47,7 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&info).unwrap());
         }
         cli::Action::Download { path, .. } => {
+            let path = path.unwrap_or_else(|| config.download.default_path.clone());
             println!("Fetching app info for {}...", pkg);
             let info = app_service.get_app_info(&pkg).await?;
             println!();
