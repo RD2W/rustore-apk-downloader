@@ -18,9 +18,10 @@
 ### Скачивание APK
 
 ```bash
-rustore_apk_downloader <package> <path>
+rustore_apk_downloader <package> [path]
+# path необязателен — по умолчанию из config.toml download.default_path
 # или через cargo:
-cargo run -- <package> <path>
+cargo run -- <package> [path]
 ```
 
 Пример:
@@ -55,6 +56,38 @@ rustore_apk_downloader -j ru.yandex.yandexmaps > app.json
 | `-i`, `--info` | Информация о приложении без скачивания |
 | `-v` | Версия приложения (название + код) |
 | `-j`, `--json-info` | Информация в JSON |
+| `--config <path>` | Использовать указанный config.toml |
+
+## Конфигурация (config.toml)
+
+Опциональный `config.toml` позволяет менять настройки без пересборки. Поиск файла
+ведётся в следующем порядке:
+
+1. `--config <path>` (файл должен существовать)
+2. `config.toml` рядом с бинарником
+3. `config.toml` в текущей рабочей директории
+4. Встроенные значения по умолчанию
+
+Все ключи опциональны; неуказанные используют значения из `config.example.toml`:
+
+```toml
+[api]
+base_url = "https://backapi.rustore.ru"
+rustore_ver_code = "1000"
+
+[network]
+request_timeout_secs = 30
+download_timeout_secs = 300
+
+[download]
+default_path = "./downloads"
+# Плейсхолдеры: {package}, {version}, {version_code}, {app_name}
+file_name_template = "{package}-{version}.apk"
+
+[log]
+# off | error | warn | info | debug | trace  (RUST_LOG имеет приоритет)
+level = "error"
+```
 
 ## Скрипты с jq
 
@@ -95,6 +128,7 @@ make install-targets    # установка cross и rustup целей
 make linux              # x86_64 + aarch64
 make windows            # x86_64
 make all                # все платформы
+make linux-upx          # linux + UPX-сжатие (2,7 МБ на бинарник)
 ```
 
 На macOS — нативная сборка:
@@ -117,7 +151,8 @@ src/
   domain.rs          # AppInfo, DomainError, трейт AppRepository
   application.rs     # AppDownloadService — оркестрация
   infrastructure.rs  # RuStoreDownloader — HTTP, файлы, ZIP
-  util.rs            # SHA-256, валидация, проверки ZIP/APK
+  config.rs           # Config-структуры, загрузка config.toml, шаблоны имён файлов
+  util.rs             # SHA-256, валидация, проверки ZIP/APK
 ```
 
 | Слой | Файл | Назначение |
@@ -128,6 +163,7 @@ src/
 | CLI | `cli.rs` | Парсинг аргументов, `Action` |
 | Display | `display.rs` | `print_help()`, `print_app_info()` |
 | Utility | `util.rs` | Хеширование, валидация, проверки ZIP/APK |
+| Utility | `config.rs` | `Config`-структуры, загрузка config.toml, шаблоны имён файлов |
 
 ## Зависимости
 
@@ -137,6 +173,7 @@ src/
 - `zip` 8.6 (работа с ZIP-архивами)
 - `sha2` 0.11 (SHA-256)
 - `regex` 1.12 (валидация имени пакета)
+- `toml` 0.9 (парсинг config.toml)
 - `log` + `env_logger` (логирование)
 
 ## Безопасность
