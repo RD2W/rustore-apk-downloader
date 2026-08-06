@@ -133,24 +133,13 @@ const OVERALL_INFO_PATH: &str = "/applicationData/overallInfo";
 /// API path: requests a download link with device-specific parameters.
 const DOWNLOAD_LINK_PATH: &str = "/v3/showcase/apps/download-link";
 
-/// Default ABI sent to the showcase API to emulate a real device.
-const DEFAULT_ABI: &str = "arm64-v8a";
-
-/// Default locale sent to the showcase API.
-const DEFAULT_LOCALE: &str = "ru";
-
-/// Default screen density (DPI) sent to the showcase API.
-const DEFAULT_SCREEN_DENSITY: i64 = 480;
-
-/// Default Android SDK version sent to the showcase API.
-const DEFAULT_SDK_VERSION: i64 = 33;
-
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {
     client: reqwest::Client,
     base_url: String,
     download_timeout_secs: u64,
     file_name_template: String,
+    device_config: crate::config::DeviceConfig,
 }
 
 impl RuStoreDownloader {
@@ -179,6 +168,7 @@ impl RuStoreDownloader {
             base_url: config.api.base_url.clone(),
             download_timeout_secs: config.network.download_timeout_secs,
             file_name_template: config.download.file_name_template.clone(),
+            device_config: config.device.clone(),
         })
     }
 
@@ -255,6 +245,12 @@ impl RuStoreDownloader {
 
 impl RuStoreDownloader {
     async fn fetch_download_link(&self, app_id: i64) -> Result<String, DomainError> {
+        let mobile_services = if self.device_config.mobile_services.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::to_value(&self.device_config.mobile_services).unwrap_or_default()
+        };
+
         let download_response = self
             .client
             .post(format!("{}{}", self.base_url, DOWNLOAD_LINK_PATH))
@@ -262,11 +258,12 @@ impl RuStoreDownloader {
             .json(&serde_json::json!({
                 "appId": app_id,
                 "firstInstall": true,
-                "supportedAbis": [DEFAULT_ABI],
-                "screenDensity": DEFAULT_SCREEN_DENSITY,
-                "supportedLocales": [DEFAULT_LOCALE],
-                "sdkVersion": DEFAULT_SDK_VERSION,
-                "withoutSplits": false
+                "mobileServices": mobile_services,
+                "supportedAbis": self.device_config.supported_abis,
+                "screenDensity": self.device_config.screen_density,
+                "supportedLocales": self.device_config.supported_locales,
+                "sdkVersion": self.device_config.sdk_version,
+                "withoutSplits": self.device_config.without_splits
             }))
             .send()
             .await

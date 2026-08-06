@@ -24,6 +24,7 @@ pub struct Config {
     pub api: ApiConfig,
     pub network: NetworkConfig,
     pub download: DownloadConfig,
+    pub device: DeviceConfig,
     pub log: LogConfig,
 }
 
@@ -71,6 +72,36 @@ impl Default for DownloadConfig {
         Self {
             default_path: "./downloads".to_string(),
             file_name_template: "{package}-{version}.apk".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct DeviceConfig {
+    /// List of ABIs to request from the showcase API (arm64-v8a, armeabi-v7a, x86_64, x86).
+    pub supported_abis: Vec<String>,
+    /// List of locale codes (e.g. "ru", "en").
+    pub supported_locales: Vec<String>,
+    /// Screen density in DPI (120, 160, 240, 320, 480, 640).
+    pub screen_density: i64,
+    /// Android SDK version (21+).
+    pub sdk_version: i64,
+    /// Request a unified APK without split bundles.
+    pub without_splits: bool,
+    /// Mobile services ecosystem: GMS (Google), HMS (Huawei). Empty = none.
+    pub mobile_services: Vec<String>,
+}
+
+impl Default for DeviceConfig {
+    fn default() -> Self {
+        Self {
+            supported_abis: vec!["arm64-v8a".to_string()],
+            supported_locales: vec!["ru".to_string()],
+            screen_density: 480,
+            sdk_version: 33,
+            without_splits: false,
+            mobile_services: vec!["GMS".to_string()],
         }
     }
 }
@@ -151,6 +182,52 @@ impl Config {
                 ),
             )
         })?;
+
+        const VALID_ABIS: [&str; 4] = ["arm64-v8a", "armeabi-v7a", "x86_64", "x86"];
+        for abi in &self.device.supported_abis {
+            if !VALID_ABIS.contains(&abi.as_str()) {
+                return Err(ConfigError::ValidationError(
+                    path.to_string(),
+                    format!(
+                        "invalid device.supported_abis entry '{}'; allowed: {:?}",
+                        abi, VALID_ABIS
+                    ),
+                ));
+            }
+        }
+        if self.device.supported_abis.is_empty() {
+            return Err(ConfigError::ValidationError(
+                path.to_string(),
+                "device.supported_abis must not be empty".to_string(),
+            ));
+        }
+        if self.device.supported_locales.is_empty() {
+            return Err(ConfigError::ValidationError(
+                path.to_string(),
+                "device.supported_locales must not be empty".to_string(),
+            ));
+        }
+        if self.device.sdk_version < 21 {
+            return Err(ConfigError::ValidationError(
+                path.to_string(),
+                format!(
+                    "invalid device.sdk_version {}; must be 21 or higher",
+                    self.device.sdk_version
+                ),
+            ));
+        }
+        const VALID_MOBILE_SERVICES: [&str; 2] = ["GMS", "HMS"];
+        for ms in &self.device.mobile_services {
+            if !VALID_MOBILE_SERVICES.contains(&ms.as_str()) {
+                return Err(ConfigError::ValidationError(
+                    path.to_string(),
+                    format!(
+                        "invalid device.mobile_services entry '{}'; allowed: {:?}",
+                        ms, VALID_MOBILE_SERVICES
+                    ),
+                ));
+            }
+        }
 
         Ok(())
     }
@@ -277,6 +354,12 @@ mod tests {
         assert_eq!(c.network.download_timeout_secs, 300);
         assert_eq!(c.download.default_path, "./downloads");
         assert_eq!(c.download.file_name_template, "{package}-{version}.apk");
+        assert_eq!(c.device.supported_abis, vec!["arm64-v8a"]);
+        assert_eq!(c.device.supported_locales, vec!["ru"]);
+        assert_eq!(c.device.screen_density, 480);
+        assert_eq!(c.device.sdk_version, 33);
+        assert!(!c.device.without_splits);
+        assert_eq!(c.device.mobile_services, vec!["GMS"]);
         assert_eq!(c.log.level, "error");
     }
 
@@ -330,6 +413,58 @@ rustore_ver_code = "1001"
     #[test]
     fn test_parse_broken_toml_fails() {
         assert!(toml::from_str::<Config>("[api\nbase_url=").is_err());
+    }
+
+    #[test]
+    fn test_device_config_validation_rejects_invalid_abi() {
+        let text = r#"
+[device]
+supported_abis = ["mips"]
+"#;
+        let c: Config = toml::from_str(text).unwrap();
+        let err = c.validate("test.toml").unwrap_err();
+        assert!(
+            err.to_string().contains("mips"),
+            "must mention bad ABI: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_device_config_validation_rejects_empty_abis() {
+        let text = r#"
+[device]
+supported_abis = []
+"#;
+        let c: Config = toml::from_str(text).unwrap();
+        let err = c.validate("test.toml").unwrap_err();
+        assert!(err.to_string().contains("must not be empty"), "{}", err);
+    }
+
+    #[test]
+    fn test_device_config_validation_rejects_bad_sdk() {
+        let text = r#"
+[device]
+sdk_version = 1
+"#;
+        let c: Config = toml::from_str(text).unwrap();
+        let err = c.validate("test.toml").unwrap_err();
+        assert!(err.to_string().contains("1"), "must mention sdk: {}", err);
+    }
+
+    #[test]
+    fn test_device_config_validation_rejects_bad_mobile_service() {
+        let text = r#"
+[device]
+mobile_services = ["GMS", "NOKIA"]
+"#;
+        let c: Config = toml::from_str(text).unwrap();
+        let err = c.validate("test.toml").unwrap_err();
+        assert!(
+            err.to_string().contains("NOKIA"),
+            "must mention bad service: {}",
+            err
+        );
     }
 
     #[test]
