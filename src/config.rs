@@ -158,7 +158,7 @@ impl Config {
 
 /// Checks that a file name template contains only known placeholders.
 pub fn validate_template(template: &str) -> Result<(), ConfigError> {
-    let re = regex::Regex::new(r"\{([^{}]*)\}").expect("static regex");
+    let re = regex::Regex::new(r"\{([^{}]*)}").expect("static regex");
     for cap in re.captures_iter(template) {
         let name = &cap[1];
         if !ALLOWED_PLACEHOLDERS.contains(&name) {
@@ -339,6 +339,7 @@ rustore_ver_code = "1001"
 
     fn mock_app() -> crate::domain::AppInfo {
         crate::domain::AppInfo {
+            app_id: 42,
             app_name: "My App: The/Best?".to_string(),
             package_name: "com.example.app".to_string(),
             version_name: "1.2.3".to_string(),
@@ -349,7 +350,7 @@ rustore_ver_code = "1001"
             max_sdk_version: 0,
             target_sdk_version: 0,
             icon_url: String::new(),
-            download_url: String::new(),
+            download_url: None,
             integration_type: "rustore".to_string(),
             rating: None,
             whats_new: None,

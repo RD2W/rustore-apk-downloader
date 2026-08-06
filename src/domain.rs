@@ -15,6 +15,7 @@ impl fmt::Display for Rating {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppInfo {
+    pub app_id: i64,
     pub app_name: String,
     pub package_name: String,
     pub version_name: String,
@@ -25,7 +26,7 @@ pub struct AppInfo {
     pub max_sdk_version: i64,
     pub target_sdk_version: i64,
     pub icon_url: String,
-    pub download_url: String,
+    pub download_url: Option<String>,
     pub integration_type: String,
     pub rating: Option<Rating>,
     pub whats_new: Option<String>,
@@ -82,6 +83,7 @@ mod tests {
 
     fn mock_app_info() -> AppInfo {
         AppInfo {
+            app_id: 123456,
             app_name: "Example App".to_string(),
             package_name: "com.example.app".to_string(),
             version_name: "1.2.3".to_string(),
@@ -92,7 +94,7 @@ mod tests {
             max_sdk_version: 34,
             target_sdk_version: 33,
             icon_url: "https://example.com/icon.png".to_string(),
-            download_url: "https://example.com/app.apk".to_string(),
+            download_url: Some("https://example.com/app.apk".to_string()),
             integration_type: "rustore".to_string(),
             rating: Some(Rating {
                 average: 4.5,
