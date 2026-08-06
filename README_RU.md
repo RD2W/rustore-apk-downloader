@@ -4,11 +4,12 @@
 
 ## Возможности
 
-- Загрузка APK с RuStore с индикацией прогресса
-- Просмотр информации о приложении без скачивания (`--info`, `-v`, `--json-info`)
+- Загрузка APK с RuStore через мобильный showcase API (прямые APK, для старых приложений — извлечение из ZIP)
+- Просмотр метаданных приложения без скачивания (`--info`, `-v`, `--json-info`)
+- Определение внешних источников — `--info` показывает, когда приложение загружено из стороннего источника и недоступно для прямой загрузки
+- Эмуляция профиля устройства через `[device]` в config.toml — выбор ABI, DPI, версии SDK, локали, мобильных сервисов
 - Вывод в JSON для скриптов и автоматизации
 - Проверка целостности файлов по SHA-256
-- Обработка ZIP-архивов (RuStore заворачивает APK в ZIP)
 - Автоматическая очистка временных файлов при ошибках
 - Защита от path traversal атак
 - TLS с системными сертификатами (Windows, Linux, macOS)
@@ -84,6 +85,21 @@ default_path = "./downloads"
 # Плейсхолдеры: {package}, {version}, {version_code}, {app_name}
 file_name_template = "{package}-{version}.apk"
 
+[device]
+# Профиль Android-устройства — отправляется в showcase API для выбора нужного варианта APK.
+# Список ABI, первый — предпочтительный: arm64-v8a, armeabi-v7a, x86_64, x86
+supported_abis = ["arm64-v8a"]
+# Коды локалей (например, "ru", "en", "en-US")
+supported_locales = ["ru"]
+# Плотность экрана в DPI: 120, 160, 240, 320, 480, 640
+screen_density = 480
+# Уровень Android SDK (21+)
+sdk_version = 33
+# Запросить unified APK без split-пакетов
+without_splits = false
+# Мобильные сервисы: GMS (Google), HMS (Huawei). Пусто — без сервисов
+mobile_services = ["GMS"]
+
 [log]
 # off | error | warn | info | debug | trace  (RUST_LOG имеет приоритет)
 level = "error"
@@ -103,6 +119,16 @@ rustore_apk_downloader -j ru.yandex.yandexmaps | jq '"\(.file_size) байт ≈
 
 # Проверить существование пакета
 rustore_apk_downloader -j ru.yandex.yandexmaps > /dev/null && echo "существует"
+
+# Проверить, доступно ли приложение для скачивания (у внешних download_url = null)
+url=$(rustore_apk_downloader -j ru.yandex.yandexmaps | jq -r '.download_url // "внешний источник"')
+echo "Ссылка: $url"
+
+# Получить app_id для использования в API
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq '.app_id'
+
+# Определить внешние приложения (integration_type != "rustore")
+rustore_apk_downloader -j com.eshare.clientv2 | jq '{src: .integration_type, dl: .download_url}'
 
 # Сохранить метаданные и скачать отдельно
 rustore_apk_downloader -j ru.yandex.yandexmaps > meta.json
@@ -168,13 +194,45 @@ src/
 ## Зависимости
 
 - `reqwest` 0.13 + `rustls` (чистый Rust TLS, системные сертификаты)
-- `tokio` 1.52 (асинхронный рантайм)
+- `tokio` 1.53 (асинхронный рантайм)
 - `serde` / `serde_json` (сериализация)
 - `zip` 8.6 (работа с ZIP-архивами)
 - `sha2` 0.11 (SHA-256)
 - `regex` 1.12 (валидация имени пакета)
 - `toml` 1 (парсинг config.toml)
+- `anyhow` 1.0 (обработка ошибок)
+- `thiserror` 2.0 (derive Error)
 - `log` + `env_logger` (логирование)
+- `futures-util` 0.3 (потоковая загрузка)
+
+## Решение проблем
+
+### Приложения из внешних источников
+
+Некоторые приложения в RuStore загружены из внешних источников (агрегаторов) и не имеют прямой ссылки на APK. Проверить можно через `--info`:
+
+```
+Source:    Загружено из внешнего источника
+```
+
+Такие приложения можно установить только через мобильное приложение RuStore — API не предоставляет URL для скачивания. Запросы метаданных (`--info`, `--json-info`) работают.
+
+### APK не найден для выбранного ABI
+
+Не для всех приложений есть сборки под каждую архитектуру. Если при кастомном ABI в `[device]` появляется ошибка *«No downloadable APK found»*, переключитесь на самый распространённый:
+
+```toml
+[device]
+supported_abis = ["arm64-v8a"]
+```
+
+### Отладка
+
+Установите переменную окружения `RUST_LOG` для просмотра деталей API-запросов:
+
+```bash
+RUST_LOG=debug rustore_apk_downloader ru.yandex.yandexmaps ./out
+```
 
 ## Безопасность
 
