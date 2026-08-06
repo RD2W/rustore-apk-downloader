@@ -4,11 +4,12 @@ A Rust CLI for downloading APK files from RuStore.ru and querying app metadata.
 
 ## Features
 
-- Download APKs from RuStore with progress indication
-- Query app information without downloading (`--info`, `-v`, `--json-info`)
+- Download APKs from RuStore via the mobile showcase API (direct APKs, fallback ZIP extraction for legacy apps)
+- Query app metadata without downloading (`--info`, `-v`, `--json-info`)
+- External source detection — `--info` shows when an app is loaded from third-parties and cannot be downloaded directly
+- Device profile emulation via `[device]` in config.toml — choose ABI, DPI, SDK version, locale, mobile services
 - JSON output for scripting and automation
 - SHA-256 file integrity verification
-- ZIP archive handling (RuStore wraps APKs in ZIP)
 - Automatic temp file cleanup on errors
 - Path sanitization against traversal attacks
 - OS-native TLS certificate verification (Windows, Linux, macOS)
@@ -84,6 +85,21 @@ default_path = "./downloads"
 # Placeholders: {package}, {version}, {version_code}, {app_name}
 file_name_template = "{package}-{version}.apk"
 
+[device]
+# Android device profile — sent to the showcase API to choose the right APK variant.
+# ABI list, first entry is preferred: arm64-v8a, armeabi-v7a, x86_64, x86
+supported_abis = ["arm64-v8a"]
+# Locale codes (e.g. "ru", "en", "en-US")
+supported_locales = ["ru"]
+# Screen density in DPI: 120, 160, 240, 320, 480, 640
+screen_density = 480
+# Android SDK level (21+)
+sdk_version = 33
+# Request a unified APK without split bundles
+without_splits = false
+# Mobile services: GMS (Google), HMS (Huawei). Empty = none
+mobile_services = ["GMS"]
+
 [log]
 # off | error | warn | info | debug | trace  (RUST_LOG env var overrides this)
 level = "error"
@@ -103,6 +119,16 @@ rustore_apk_downloader -j ru.yandex.yandexmaps | jq '"\(.file_size) bytes ≈ \(
 
 # Check if a specific package exists
 rustore_apk_downloader -j ru.yandex.yandexmaps > /dev/null && echo "exists"
+
+# Check if an app is downloadable (external apps have null download_url)
+url=$(rustore_apk_downloader -j ru.yandex.yandexmaps | jq -r '.download_url // "external"')
+echo "Download URL: $url"
+
+# Get app_id for custom API use
+rustore_apk_downloader -j ru.yandex.yandexmaps | jq '.app_id'
+
+# Detect external-source apps (integration_type != "rustore")
+rustore_apk_downloader -j com.eshare.clientv2 | jq '{src: .integration_type, dl: .download_url}'
 
 # Save metadata and download separately
 rustore_apk_downloader -j ru.yandex.yandexmaps > meta.json
@@ -168,14 +194,46 @@ src/
 
 ## Dependencies
 
-- `reqwest` 0.13 + `rustls` (pure Rust TLS, OS cert store)
-- `tokio` 1.52 (async runtime)
+- `reqwest` 0.13 + `rustls` (pure Rust TLS, native OS cert store)
+- `tokio` 1.53 (async runtime)
 - `serde` / `serde_json` (serialization)
 - `zip` 8.6 (ZIP archive handling)
 - `sha2` 0.11 (SHA-256 hashing)
 - `regex` 1.12 (package name validation)
 - `toml` 1 (config file parsing)
+- `anyhow` 1.0 (error handling)
+- `thiserror` 2.0 (derive Error)
 - `log` + `env_logger` (logging)
+- `futures-util` 0.3 (async stream helpers)
+
+## Troubleshooting
+
+### External-source apps
+
+Some apps on RuStore are loaded from external sources (aggregators) and do not have a direct APK download. Use `--info` to check:
+
+```
+Source:    Загружено из внешнего источника
+```
+
+These apps can only be installed through the RuStore mobile app — the API does not provide a download URL. Metadata queries (`--info`, `--json-info`) still work.
+
+### No APK found for a specific ABI
+
+Not all apps provide builds for every architecture. If you get *"No downloadable APK found"* with a custom ABI in `[device]`, try switching to the most common one:
+
+```toml
+[device]
+supported_abis = ["arm64-v8a"]
+```
+
+### Debug logging
+
+Set the `RUST_LOG` environment variable to see API request/response details:
+
+```bash
+RUST_LOG=debug rustore_apk_downloader ru.yandex.yandexmaps ./out
+```
 
 ## License
 

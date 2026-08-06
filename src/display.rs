@@ -63,6 +63,9 @@ pub fn print_app_info(info: &domain::AppInfo) {
     if let Some(ref sig) = info.signature {
         println!("Signature: {}", sig);
     }
+    if info.integration_type != "rustore" {
+        println!("Source:    {}", info.integration_type);
+    }
     if let Some(ref whats_new) = info.whats_new {
         println!("———————————————");
         println!("What's new:");

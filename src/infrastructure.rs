@@ -39,6 +39,8 @@ struct AppBody {
     app_ver_updated_at: Option<String>,
     #[serde(default)]
     signature: Option<String>,
+    #[serde(default)]
+    aggregator_info: Option<AggregatorInfoResponse>,
 }
 
 #[derive(Deserialize)]
@@ -52,16 +54,33 @@ struct AgeRestrictionBody {
     category: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
-struct DownloadLinkResponse {
-    body: DownloadLinkBody,
+#[allow(dead_code)]
+struct AggregatorInfoResponse {
+    aggregator_app_id: i64,
+    company_name: String,
+    source: String,
+    #[serde(default)]
+    app_coins: bool,
+    #[serde(default)]
+    displayed_source: Option<String>,
+    #[serde(default)]
+    source_informer_text: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DownloadLinkBody {
-    apk_url: String,
+struct DownloadLinkResponse {
+    download_urls: Vec<DownloadUrl>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DownloadUrl {
+    url: String,
+    #[allow(dead_code)]
+    size: u64,
 }
 
 /// Guard that removes a temporary file on drop unless consumed (renamed).
@@ -99,8 +118,20 @@ impl Drop for TempFileGuard {
 /// The backend rejects requests without this header (400 Bad Request).
 pub(crate) const RUSTORE_VER_CODE: &str = "1000";
 
+/// HTTP header name for the RuStore version code.
+const HEADER_RUSTORE_VER_CODE: &str = "ruStoreVerCode";
+
+/// HTTP content type for JSON API requests.
+const CONTENT_TYPE_JSON: &str = "application/json; charset=utf-8";
+
 /// Base URL of the RuStore backend API.
 pub(crate) const RUSTORE_BASE_URL: &str = "https://backapi.rustore.ru";
+
+/// API path: fetches app metadata by package name.
+const OVERALL_INFO_PATH: &str = "/applicationData/overallInfo";
+
+/// API path: requests a download link with device-specific parameters.
+const DOWNLOAD_LINK_PATH: &str = "/v3/showcase/apps/download-link";
 
 /// Implementation of AppRepository that interacts with RuStore API
 pub struct RuStoreDownloader {
@@ -108,6 +139,7 @@ pub struct RuStoreDownloader {
     base_url: String,
     download_timeout_secs: u64,
     file_name_template: String,
+    device_config: crate::config::DeviceConfig,
 }
 
 impl RuStoreDownloader {
@@ -119,7 +151,7 @@ impl RuStoreDownloader {
             })?;
 
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("ruStoreVerCode", ver_code);
+        headers.insert(HEADER_RUSTORE_VER_CODE, ver_code);
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(
@@ -136,6 +168,7 @@ impl RuStoreDownloader {
             base_url: config.api.base_url.clone(),
             download_timeout_secs: config.network.download_timeout_secs,
             file_name_template: config.download.file_name_template.clone(),
+            device_config: config.device.clone(),
         })
     }
 
@@ -175,16 +208,99 @@ impl RuStoreDownloader {
         }
         Ok(())
     }
+
+    fn finalize_apk(
+        &self,
+        temp_file_path: &str,
+        sanitized_download_path: &str,
+        app_info: &AppInfo,
+        temp_guard: &mut TempFileGuard,
+    ) -> Result<String, DomainError> {
+        let final_file_path = std::path::Path::new(sanitized_download_path)
+            .join(crate::config::render_file_name(
+                &self.file_name_template,
+                app_info,
+            ))
+            .to_string_lossy()
+            .to_string();
+
+        self.ensure_within_base(&final_file_path, sanitized_download_path)?;
+
+        std::fs::rename(temp_file_path, &final_file_path).map_err(|e| {
+            log::error!(
+                "Cannot rename temporary file from '{}' to '{}': {}",
+                temp_file_path,
+                final_file_path,
+                e
+            );
+            DomainError::FileSystemError(format!("Cannot rename temporary file: {}", e))
+        })?;
+
+        temp_guard.consume();
+        log::info!("File renamed to {}", final_file_path);
+
+        Ok(util::clean_windows_path(&final_file_path))
+    }
+}
+
+impl RuStoreDownloader {
+    async fn fetch_download_link(&self, app_id: i64) -> Result<String, DomainError> {
+        let mobile_services = if self.device_config.mobile_services.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::to_value(&self.device_config.mobile_services).unwrap_or_default()
+        };
+
+        let download_response = self
+            .client
+            .post(format!("{}{}", self.base_url, DOWNLOAD_LINK_PATH))
+            .header("Content-Type", CONTENT_TYPE_JSON)
+            .json(&serde_json::json!({
+                "appId": app_id,
+                "firstInstall": true,
+                "mobileServices": mobile_services,
+                "supportedAbis": self.device_config.supported_abis,
+                "screenDensity": self.device_config.screen_density,
+                "supportedLocales": self.device_config.supported_locales,
+                "sdkVersion": self.device_config.sdk_version,
+                "withoutSplits": self.device_config.without_splits
+            }))
+            .send()
+            .await
+            .map_err(|e| {
+                DomainError::NetworkError(format!("Download link request failed: {}", e))
+            })?;
+
+        let download_status = download_response.status();
+        log::info!("Download link request status: {}", download_status);
+
+        if download_status != 200 {
+            return Err(DomainError::ApiError(format!(
+                "Failed to get application download link. HTTP {}",
+                download_status
+            )));
+        }
+
+        let dl: DownloadLinkResponse = download_response.json().await.map_err(|e| {
+            DomainError::ApiError(format!("Invalid download response format: {}", e))
+        })?;
+
+        dl.download_urls
+            .first()
+            .map(|du| du.url.clone())
+            .ok_or_else(|| {
+                DomainError::ApiError(
+                    "No downloadable APK found for this app. It may be loaded from an external source and require installation through the RuStore mobile app.".to_string(),
+                )
+            })
+    }
 }
 
 impl AppRepository for RuStoreDownloader {
     async fn get_app_info(&self, package_name: &str) -> Result<AppInfo, DomainError> {
         log::info!("Attempting to get app info for package: {}", package_name);
 
-        let url = format!(
-            "{}/applicationData/overallInfo/{}",
-            self.base_url, package_name
-        );
+        let url = format!("{}{}/{}", self.base_url, OVERALL_INFO_PATH, package_name);
         let response = self
             .client
             .get(&url)
@@ -216,35 +332,29 @@ impl AppRepository for RuStoreDownloader {
             body.company_name.as_deref().unwrap_or("N/A")
         );
 
-        let download_response = self
-            .client
-            .post(format!("{}/applicationData/download-link", self.base_url))
-            .header("Content-Type", "application/json; charset=utf-8")
-            .json(&serde_json::json!({
-                "appId": body.app_id,
-                "firstInstall": true
-            }))
-            .send()
-            .await
-            .map_err(|e| {
-                DomainError::NetworkError(format!("Download link request failed: {}", e))
-            })?;
+        let download_url = match self.fetch_download_link(body.app_id).await {
+            Ok(url) => {
+                log::info!("Got download link for {}", body.package_name);
+                Some(url)
+            }
+            Err(e) => {
+                log::warn!(
+                    "Could not get download link for {}: {}",
+                    body.package_name,
+                    e
+                );
+                None
+            }
+        };
 
-        let download_status = download_response.status();
-        log::info!("Download link request status: {}", download_status);
-
-        if download_status != 200 {
-            return Err(DomainError::ApiError(format!(
-                "Failed to get application download link. Request returned status code: {}",
-                download_status
-            )));
-        }
-
-        let dl: DownloadLinkResponse = download_response.json().await.map_err(|e| {
-            DomainError::ApiError(format!("Invalid download response format: {}", e))
-        })?;
+        let integration_type = body
+            .aggregator_info
+            .as_ref()
+            .and_then(|a| a.displayed_source.clone())
+            .unwrap_or_else(|| "rustore".to_string());
 
         Ok(AppInfo {
+            app_id: body.app_id,
             app_name: body.app_name,
             package_name: body.package_name,
             version_name: body.version_name,
@@ -255,8 +365,8 @@ impl AppRepository for RuStoreDownloader {
             max_sdk_version: body.max_sdk_version,
             target_sdk_version: body.target_sdk_version,
             icon_url: body.icon_url,
-            download_url: dl.body.apk_url,
-            integration_type: "rustore".to_string(),
+            download_url,
+            integration_type,
             rating: body.rating.map(|r| crate::domain::Rating {
                 average: r.average,
                 votes: r.votes,
@@ -309,11 +419,19 @@ impl AppRepository for RuStoreDownloader {
 
         log::info!("Temporary file path: {}", temp_file_path);
 
+        let download_url = match &app_info.download_url {
+            Some(url) => url.clone(),
+            None => {
+                log::info!("No download URL cached, fetching from API...");
+                self.fetch_download_link(app_info.app_id).await?
+            }
+        };
+
         // Download the file
-        log::info!("Downloading from: {}", app_info.download_url);
+        log::info!("Downloading from: {}", download_url);
         let response = self
             .client
-            .get(&app_info.download_url)
+            .get(&download_url)
             .timeout(std::time::Duration::from_secs(self.download_timeout_secs))
             .send()
             .await
@@ -321,28 +439,26 @@ impl AppRepository for RuStoreDownloader {
 
         let status = response.status();
         if status != 200 {
-            if status == 401 {
-                return Err(DomainError::DownloadError(format!(
+            return if status == 401 {
+                Err(DomainError::DownloadError(format!(
                     "Failed to download application. Unauthorized access. Request returned status code: {}",
                     status
-                )));
+                )))
             } else {
                 let response_text = response.text().await.unwrap_or_default();
-                return Err(DomainError::DownloadError(format!(
+                Err(DomainError::DownloadError(format!(
                     "Failed to download application. Request returned status code: {}, Response: {}",
                     status, response_text
-                )));
-            }
+                )))
+            };
         }
 
         // Stream the response to a temporary file
         log::info!("Creating temporary file: {}", temp_file_path);
-        let mut file = tokio::fs::File::create(&temp_file_path)
-            .await
-            .map_err(|e| {
-                log::error!("Cannot create temporary file '{}': {}", temp_file_path, e);
-                DomainError::FileSystemError(format!("Cannot create temporary file: {}", e))
-            })?;
+        let mut file = fs::File::create(&temp_file_path).await.map_err(|e| {
+            log::error!("Cannot create temporary file '{}': {}", temp_file_path, e);
+            DomainError::FileSystemError(format!("Cannot create temporary file: {}", e))
+        })?;
 
         let mut temp_guard = TempFileGuard::new(temp_file_path.clone());
 
@@ -419,6 +535,15 @@ impl AppRepository for RuStoreDownloader {
             }
 
             if apk_files.is_empty() {
+                if util::is_valid_apk_file(&temp_file_path)? {
+                    log::info!("ZIP file itself is a valid APK, renaming...");
+                    return self.finalize_apk(
+                        &temp_file_path,
+                        &sanitized_download_path,
+                        app_info,
+                        &mut temp_guard,
+                    );
+                }
                 return Err(DomainError::DownloadError(
                     "No APK file found inside the ZIP archive".to_string(),
                 ));
@@ -490,7 +615,6 @@ impl AppRepository for RuStoreDownloader {
         } else {
             log::info!("Downloaded file is not a ZIP archive, checking if it's a valid APK");
 
-            // The file is not a ZIP, check if it's a valid APK
             if !util::is_valid_apk_file(&temp_file_path)? {
                 return Err(DomainError::ValidationError(format!(
                     "Downloaded file is not a valid APK: {}",
@@ -498,37 +622,12 @@ impl AppRepository for RuStoreDownloader {
                 )));
             }
 
-            // Rename the temporary file to APK
-            let final_file_path = std::path::Path::new(&sanitized_download_path)
-                .join(crate::config::render_file_name(
-                    &self.file_name_template,
-                    app_info,
-                ))
-                .to_string_lossy()
-                .to_string();
-
-            log::info!(
-                "Renaming temporary file to final APK path: {}",
-                final_file_path
-            );
-
-            // Verify the final path is within the download directory
-            self.ensure_within_base(&final_file_path, &sanitized_download_path)?;
-
-            std::fs::rename(&temp_file_path, &final_file_path).map_err(|e| {
-                log::error!(
-                    "Cannot rename temporary file from '{}' to '{}': {}",
-                    temp_file_path,
-                    final_file_path,
-                    e
-                );
-                DomainError::FileSystemError(format!("Cannot rename temporary file: {}", e))
-            })?;
-
-            temp_guard.consume();
-            log::info!("File is already an APK, renamed to {}", final_file_path);
-
-            Ok(util::clean_windows_path(&final_file_path))
+            self.finalize_apk(
+                &temp_file_path,
+                &sanitized_download_path,
+                app_info,
+                &mut temp_guard,
+            )
         }
     }
 }
@@ -538,8 +637,7 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    #[tokio::test]
-    async fn test_get_app_info_sends_rustore_ver_code_header() {
+    async fn spawn_test_server() -> (String, tokio::task::JoinHandle<String>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
@@ -554,47 +652,45 @@ mod tests {
             request
         });
 
+        (format!("http://{}", addr), server)
+    }
+
+    #[tokio::test]
+    async fn test_get_app_info_sends_rustore_ver_code_header() {
+        let (base_url, server) = spawn_test_server().await;
+
         let mut config = crate::config::Config::default();
-        config.api.base_url = format!("http://{}", addr);
+        config.api.base_url = base_url;
         config.api.rustore_ver_code = "1000".to_string();
         let downloader = RuStoreDownloader::new(&config).unwrap();
 
         let _ = downloader.get_app_info("ru.example.app").await;
 
         let request = server.await.unwrap();
+        let expected_header = format!("{}: 1000", HEADER_RUSTORE_VER_CODE.to_lowercase());
         assert!(
-            request.to_lowercase().contains("rustorevercode: 1000"),
-            "Request must include ruStoreVerCode header. Actual request:\n{}",
+            request.to_lowercase().contains(&expected_header),
+            "Request must include {}: 1000 header. Actual request:\n{}",
+            HEADER_RUSTORE_VER_CODE,
             request
         );
     }
 
     #[tokio::test]
     async fn test_rustore_ver_code_header_value_comes_from_config() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buf = vec![0u8; 8192];
-            let n = socket.read(&mut buf).await.unwrap();
-            let request = String::from_utf8_lossy(&buf[..n]).to_string();
-            let response =
-                "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-            socket.write_all(response.as_bytes()).await.unwrap();
-            request
-        });
+        let (base_url, server) = spawn_test_server().await;
 
         let mut config = crate::config::Config::default();
-        config.api.base_url = format!("http://{}", addr);
+        config.api.base_url = base_url;
         config.api.rustore_ver_code = "9999".to_string();
         let downloader = RuStoreDownloader::new(&config).unwrap();
 
         let _ = downloader.get_app_info("ru.example.app").await;
 
         let request = server.await.unwrap();
+        let expected_header = format!("{}: 9999", HEADER_RUSTORE_VER_CODE.to_lowercase());
         assert!(
-            request.to_lowercase().contains("rustorevercode: 9999"),
+            request.to_lowercase().contains(&expected_header),
             "Header must use configured value. Actual request:\n{}",
             request
         );
