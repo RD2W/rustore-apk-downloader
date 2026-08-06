@@ -17,7 +17,7 @@ jobs:
     name: Linux x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache dependencies
@@ -26,8 +26,12 @@ jobs:
         run: cargo build --release
       - name: Strip binary
         run: strip target/release/rustore_apk_downloader
+      - name: Install UPX
+        uses: ./.github/actions/install-upx
+      - name: UPX
+        run: upx --best --lzma target/release/rustore_apk_downloader
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-x86_64
           path: target/release/rustore_apk_downloader
@@ -36,7 +40,7 @@ jobs:
     name: Linux aarch64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Install cross
@@ -45,8 +49,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Build with cross
         run: cross build --target aarch64-unknown-linux-gnu --release
+      - name: Install UPX
+        uses: ./.github/actions/install-upx
+      - name: UPX
+        run: upx --best --lzma target/aarch64-unknown-linux-gnu/release/rustore_apk_downloader
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: linux-aarch64
           path: target/aarch64-unknown-linux-gnu/release/rustore_apk_downloader
@@ -56,7 +64,7 @@ jobs:
     name: Windows x86_64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -69,8 +77,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --target x86_64-pc-windows-gnu --release
+      - name: Install UPX
+        uses: ./.github/actions/install-upx
+      - name: UPX
+        run: upx --best --lzma target/x86_64-pc-windows-gnu/release/rustore_apk_downloader.exe
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: windows-x86_64
           path: target/x86_64-pc-windows-gnu/release/rustore_apk_downloader.exe
@@ -80,7 +92,7 @@ jobs:
     name: macOS x86_64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -92,7 +104,7 @@ jobs:
       - name: Strip binary
         run: strip target/x86_64-apple-darwin/release/rustore_apk_downloader
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-x86_64
           path: target/x86_64-apple-darwin/release/rustore_apk_downloader
@@ -101,7 +113,7 @@ jobs:
     name: macOS aarch64
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache dependencies
@@ -111,7 +123,7 @@ jobs:
       - name: Strip binary
         run: strip target/release/rustore_apk_downloader
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-aarch64
           path: target/release/rustore_apk_downloader
@@ -127,14 +139,14 @@ jobs:
       - build-macos-aarch64
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
 
       - name: Create archives
         env:
@@ -148,7 +160,7 @@ jobs:
           tar -czf dist/RuStore_ApkDownloader_${VER}_macos-aarch64.tar.gz -C macos-aarch64 .
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.version }}
           name: Release ${{ steps.version.outputs.version }}
